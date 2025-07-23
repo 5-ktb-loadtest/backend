@@ -2,7 +2,7 @@
 require('dotenv').config();
 
 // 기본 키와 솔트 (개발 환경용)
-const DEFAULT_ENCRYPTION_KEY = 'a'.repeat(64); // 32바이트를 hex로 표현
+const DEFAULT_ENCRYPTION_KEY = 'e3b1c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'; // 32바이트를 hex로 표현
 const DEFAULT_PASSWORD_SALT = 'b'.repeat(32); // 16바이트를 hex로 표현
 
 module.exports = {
