@@ -8,10 +8,13 @@ const redisClient = require('../utils/redisClient');
 const SessionService = require('../services/sessionService');
 const aiService = require('../services/aiService');
 
+// Redis key helpers
+const getConnectedUserKey = (userId) => `connected_user:${userId}`;
+const getUserRoomKey = (userId) => `user_room:${userId}`;
+const getRoomUsersKey = (roomId) => `room_users:${roomId}`;
+
 module.exports = function(io) {
-  const connectedUsers = new Map();
   const streamingSessions = new Map();
-  const userRooms = new Map();
   const messageQueues = new Map();
   const messageLoadRetries = new Map();
   const BATCH_SIZE = 30;  // 한 번에 로드할 메시지 수
@@ -197,8 +200,8 @@ module.exports = function(io) {
         return next(new Error('Invalid token'));
       }
 
-      // 이미 연결된 사용자인지 확인
-      const existingSocketId = connectedUsers.get(decoded.user.id);
+      // Redis에서 기존 소켓ID 확인
+      const existingSocketId = await redisClient.get(getConnectedUserKey(decoded.user.id));
       if (existingSocketId) {
         const existingSocket = io.sockets.sockets.get(existingSocketId);
         if (existingSocket) {
@@ -228,7 +231,6 @@ module.exports = function(io) {
 
       await SessionService.updateLastActivity(decoded.user.id);
       next();
-
     } catch (error) {
       console.error('Socket authentication error:', error);
       
@@ -251,35 +253,36 @@ module.exports = function(io) {
       userName: socket.user?.name
     });
 
+    // 소켓 연결 시 Redis에 연결 정보 저장
     if (socket.user) {
-      // 이전 연결이 있는지 확인
-      const previousSocketId = connectedUsers.get(socket.user.id);
-      if (previousSocketId && previousSocketId !== socket.id) {
-        const previousSocket = io.sockets.sockets.get(previousSocketId);
-        if (previousSocket) {
-          // 이전 연결에 중복 로그인 알림
-          previousSocket.emit('duplicate_login', {
-            type: 'new_login_attempt',
-            deviceInfo: socket.handshake.headers['user-agent'],
-            ipAddress: socket.handshake.address,
-            timestamp: Date.now()
-          });
-
-          // 이전 연결 종료 처리
-          setTimeout(() => {
-            previousSocket.emit('session_ended', {
-              reason: 'duplicate_login',
-              message: '다른 기기에서 로그인하여 현재 세션이 종료되었습니다.'
-            });
-            previousSocket.disconnect(true);
-          }, DUPLICATE_LOGIN_TIMEOUT);
-        }
-      }
-      
-      // 새로운 연결 정보 저장
-      connectedUsers.set(socket.user.id, socket.id);
+      redisClient.set(getConnectedUserKey(socket.user.id), socket.id);
     }
 
+    // 이전 연결이 있는지 확인
+    // redis로 변경
+    const previousSocketId = redisClient.get(getConnectedUserKey(socket.user.id));
+    if (previousSocketId && previousSocketId !== socket.id) {
+      const previousSocket = io.sockets.sockets.get(previousSocketId);
+      if (previousSocket) {
+        // 이전 연결에 중복 로그인 알림
+        previousSocket.emit('duplicate_login', {
+          type: 'new_login_attempt',
+          deviceInfo: socket.handshake.headers['user-agent'],
+          ipAddress: socket.handshake.address,
+          timestamp: Date.now()
+        });
+
+        // 이전 연결 종료 처리
+        setTimeout(() => {
+          previousSocket.emit('session_ended', {
+            reason: 'duplicate_login',
+            message: '다른 기기에서 로그인하여 현재 세션이 종료되었습니다.'
+          });
+          previousSocket.disconnect(true);
+        }, DUPLICATE_LOGIN_TIMEOUT);
+      }
+    }
+      
     // 이전 메시지 로딩 처리 개선
     socket.on('fetchPreviousMessages', async ({ roomId, before }) => {
       const queueKey = `${roomId}:${socket.user.id}`;
@@ -341,8 +344,8 @@ module.exports = function(io) {
           throw new Error('Unauthorized');
         }
 
-        // 이미 해당 방에 참여 중인지 확인
-        const currentRoom = userRooms.get(socket.user.id);
+        // Redis에서 현재 방 확인
+        const currentRoom = await redisClient.get(getUserRoomKey(socket.user.id));
         if (currentRoom === roomId) {
           logDebug('already in room', {
             userId: socket.user.id,
@@ -359,13 +362,18 @@ module.exports = function(io) {
             roomId: currentRoom 
           });
           socket.leave(currentRoom);
-          userRooms.delete(socket.user.id);
+          await redisClient.del(getUserRoomKey(socket.user.id));
+          await redisClient.client.sRem(getRoomUsersKey(currentRoom), socket.user.id);
           
           socket.to(currentRoom).emit('userLeft', {
             userId: socket.user.id,
             name: socket.user.name
           });
         }
+
+        // 방 참여자 목록에 추가
+        await redisClient.set(getUserRoomKey(socket.user.id), roomId);
+        await redisClient.client.sAdd(getRoomUsersKey(roomId), socket.user.id);
 
         // 채팅방 참가 with profileImage
         const room = await Room.findByIdAndUpdate(
@@ -382,7 +390,6 @@ module.exports = function(io) {
         }
 
         socket.join(roomId);
-        userRooms.set(socket.user.id, roomId);
 
         // 입장 메시지 생성
         const joinMessage = new Message({
@@ -580,7 +587,7 @@ module.exports = function(io) {
         }
 
         // 실제로 해당 방에 참여 중인지 먼저 확인
-        const currentRoom = userRooms?.get(socket.user.id);
+        const currentRoom = await redisClient.get(getUserRoomKey(socket.user.id));
         if (!currentRoom || currentRoom !== roomId) {
           console.log(`User ${socket.user.id} is not in room ${roomId}`);
           return;
@@ -598,7 +605,8 @@ module.exports = function(io) {
         }
 
         socket.leave(roomId);
-        userRooms.delete(socket.user.id);
+        await redisClient.del(getUserRoomKey(socket.user.id));
+        await redisClient.client.sRem(getRoomUsersKey(roomId), socket.user.id);
 
         // 퇴장 메시지 생성 및 저장
         const leaveMessage = await Message.create({
@@ -654,14 +662,18 @@ module.exports = function(io) {
       if (!socket.user) return;
 
       try {
-        // 해당 사용자의 현재 활성 연결인 경우에만 정리
-        if (connectedUsers.get(socket.user.id) === socket.id) {
-          connectedUsers.delete(socket.user.id);
+        // 연결 정보 삭제
+        const connectedSocketId = await redisClient.get(getConnectedUserKey(socket.user.id));
+        if (connectedSocketId === socket.id) {
+          await redisClient.del(getConnectedUserKey(socket.user.id));
         }
-
-        const roomId = userRooms.get(socket.user.id);
-        userRooms.delete(socket.user.id);
-
+        // 방 정보 삭제
+        const roomId = await redisClient.get(getUserRoomKey(socket.user.id));
+        if (roomId) {
+          await redisClient.del(getUserRoomKey(socket.user.id));
+          await redisClient.client.sRem(getRoomUsersKey(roomId), socket.user.id);
+        }
+        
         // 메시지 큐 정리
         const userQueues = Array.from(messageQueues.keys())
           .filter(key => key.endsWith(`:${socket.user.id}`));
