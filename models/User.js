@@ -1,59 +1,12 @@
-const mongoose = require('mongoose');
+// models/User.js
+const redisDataLayer = require('../data/redisDataLayer');
 const bcrypt = require('bcryptjs');
-const { encryptionKey, passwordSalt } = require('../config/keys');
+const { encryptionKey } = require('../config/keys');
 const crypto = require('crypto');
 
-const UserSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: [true, '이름은 필수 입력 항목입니다.'],
-    trim: true,
-    minlength: [2, '이름은 2자 이상이어야 합니다.']
-  },
-  email: {
-    type: String,
-    required: [true, '이메일은 필수 입력 항목입니다.'],
-    unique: true,
-    trim: true,
-    lowercase: true,
-    match: [
-      /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-      '올바른 이메일 형식이 아닙니다.'
-    ]
-  },
-  encryptedEmail: {
-    type: String,
-    unique: true,
-    sparse: true
-  },
-  password: {
-    type: String,
-    required: [true, '비밀번호는 필수 입력 항목입니다.'],
-    minlength: [6, '비밀번호는 6자 이상이어야 합니다.'],
-    select: false
-  },
-  profileImage: {
-    type: String,
-    default: ''
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  lastActive: {
-    type: Date,
-    default: Date.now
-  }
-});
-
-// 이메일 암호화 함수
 function encryptEmail(email) {
   if (!email) return null;
   try {
-    // encryptionKey 길이 체크 (32바이트 = 64 hex 문자)
-    if (!encryptionKey || encryptionKey.length !== 64) {
-      throw new Error('Encryption key must be 64 hex characters (32 bytes)');
-    }
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(encryptionKey, 'hex'), iv);
     let encrypted = cipher.update(email, 'utf8', 'hex');
@@ -61,106 +14,14 @@ function encryptEmail(email) {
     return iv.toString('hex') + ':' + encrypted;
   } catch (error) {
     console.error('Email encryption error:', error);
-    throw error; // null 반환 대신 예외 발생
+    return null;
   }
 }
 
-// 비밀번호 해싱 및 이메일 암호화 미들웨어
-UserSchema.pre('save', async function(next) {
+function decryptEmail(encryptedEmail) {
+  if (!encryptedEmail) return null;
   try {
-    // 비밀번호 변경 시에만 해싱
-    if (this.isModified('password')) {
-      const salt = await bcrypt.genSalt(10);
-      this.password = await bcrypt.hash(this.password, salt);
-    }
-
-    // 이메일 변경 시에만 암호화
-    if (this.isModified('email')) {
-      this.encryptedEmail = encryptEmail(this.email); // 실패 시 예외 발생
-    }
-
-    next();
-  } catch (error) {
-    next(error); // 암호화 실패 시 저장 중단
-  }
-});
-
-// 비밀번호 비교 메서드
-UserSchema.methods.matchPassword = async function(enteredPassword) {
-  try {
-    const user = await this.constructor.findById(this._id).select('+password');
-    if (!user || !user.password) {
-      return false;
-    }
-    return await bcrypt.compare(enteredPassword, user.password);
-  } catch (error) {
-    console.error('Password match error:', error);
-    return false;
-  }
-};
-
-// 토큰 생성 메서드
-UserSchema.methods.generateVerificationToken = function() {
-  const crypto = require('crypto');
-  const token = crypto.randomBytes(32).toString('hex');
-  return token;
-};
-
-// 활성 상태 업데이트 메서드
-UserSchema.methods.updateLastActive = async function() {
-  this.lastActive = new Date();
-  return this.save();
-};
-
-// 사용자 정보 변경 메서드
-UserSchema.methods.updateProfile = async function(updateData) {
-  const allowedUpdates = ['name', 'profileImage'];
-  const updates = {};
-
-  Object.keys(updateData).forEach(key => {
-    if (allowedUpdates.includes(key)) {
-      updates[key] = updateData[key];
-    }
-  });
-
-  Object.assign(this, updates);
-  return this.save();
-};
-
-// 비밀번호 변경 메서드
-UserSchema.methods.changePassword = async function(currentPassword, newPassword) {
-  try {
-    // 현재 비밀번호 확인
-    const isMatch = await this.matchPassword(currentPassword);
-    if (!isMatch) {
-      throw new Error('현재 비밀번호가 일치하지 않습니다.');
-    }
-
-    // 새 비밀번호 설정
-    this.password = newPassword;
-    return this.save();
-  } catch (error) {
-    throw error;
-  }
-};
-
-// 계정 삭제 메서드
-UserSchema.methods.deleteAccount = async function() {
-  try {
-    // 연결된 데이터 삭제 로직 추가
-    await this.constructor.deleteOne({ _id: this._id });
-    return true;
-  } catch (error) {
-    throw error;
-  }
-};
-
-// 이메일 복호화 메서드
-UserSchema.methods.decryptEmail = function() {
-  if (!this.encryptedEmail) return null;
-  
-  try {
-    const [ivHex, encryptedHex] = this.encryptedEmail.split(':');
+    const [ivHex, encryptedHex] = encryptedEmail.split(':');
     const iv = Buffer.from(ivHex, 'hex');
     const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(encryptionKey, 'hex'), iv);
     let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
@@ -170,12 +31,116 @@ UserSchema.methods.decryptEmail = function() {
     console.error('Email decryption error:', error);
     return null;
   }
-};
+}
 
-// 인덱스 생성
-UserSchema.index({ email: 1 });
-UserSchema.index({ encryptedEmail: 1 }, { unique: true, sparse: true });
-UserSchema.index({ createdAt: 1 });
-UserSchema.index({ lastActive: 1 });
+class User {
+  constructor(data) {
+    this._id = data.id;
+    this.name = data.name;
+    this.email = data.email;
+    this.encryptedEmail = data.encryptedEmail;
+    this.profileImage = data.profileImage || '';
+    this.createdAt = data.createdAt;
+    this.lastActive = data.lastActive;
+    this.passwordHash = data.passwordHash;
+  }
 
-module.exports = mongoose.model('User', UserSchema);
+  static async create({ name, email, password }) {
+    if (!name || !email || !password) {
+      throw new Error('Name, email, and password are required');
+    }
+    const userCheck = await redisDataLayer.findUserByEmail(email.toLowerCase());
+    if (userCheck) {
+      throw new Error('Email already in use');
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashed = await bcrypt.hash(password, salt);
+    const encrypted = encryptEmail(email.toLowerCase());
+    console.log('Encrypting email:');
+    console.log('Encryption Key:', encryptionKey);
+    console.log('Original Email:', email);
+    console.log('Encrypted Email:', encrypted);
+    const userId = await redisDataLayer.createUser({
+      name,
+      email: email.toLowerCase(),
+      passwordHash: hashed,
+      encryptedEmail: encrypted,
+      profileImage: ''
+    });
+    return User.findById(userId);
+  }
+
+  static async findById(userId) {
+    const raw = await redisDataLayer.getUserById(userId);
+    if (!raw) return null;
+    return new User({
+      id: raw.id,
+      name: raw.name,
+      email: raw.email,
+      encryptedEmail: raw.encryptedEmail,
+      profileImage: raw.profileImage,
+      createdAt: raw.createdAt,
+      lastActive: raw.lastActive,
+      passwordHash: raw.passwordHash
+    });
+  }
+
+  static async findByEmail(email) {
+    const user = await redisDataLayer.findUserByEmail(email.toLowerCase());
+    if (!user) return null;
+    return new User({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      encryptedEmail: user.encryptedEmail,
+      profileImage: user.profileImage,
+      createdAt: user.createdAt,
+      lastActive: user.lastActive,
+      passwordHash: user.passwordHash
+    });
+  }
+
+  async matchPassword(candidatePassword) {
+    return await bcrypt.compare(candidatePassword, this.passwordHash);
+  }
+
+  async updateLastActive() {
+    await redisDataLayer.updateUserLastActive(this._id);
+    this.lastActive = new Date();
+  }
+
+  async updateProfile(updateData) {
+    const allowedUpdates = ['name', 'profileImage'];
+    const updates = {};
+    for (const key of Object.keys(updateData)) {
+      if (allowedUpdates.includes(key)) updates[key] = updateData[key];
+    }
+    if (Object.keys(updates).length > 0) {
+      await redisDataLayer.updateUser(this._id, updates);
+      Object.assign(this, updates);
+    }
+    return this;
+  }
+
+  async changePassword(currentPassword, newPassword) {
+    const isMatch = await this.matchPassword(currentPassword);
+    if (!isMatch) throw new Error('현재 비밀번호가 일치하지 않습니다.');
+    const salt = await bcrypt.genSalt(10);
+    const newHash = await bcrypt.hash(newPassword, salt);
+    await redisDataLayer.updateUser(this._id, { passwordHash: newHash });
+    this.passwordHash = newHash;
+    return this;
+  }
+
+  async deleteAccount() {
+    await redisDataLayer.deleteUser(this._id);
+    return true;
+  }
+
+  decryptEmail() {
+    return decryptEmail(this.encryptedEmail);
+  }
+}
+
+module.exports = User;

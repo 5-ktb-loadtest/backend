@@ -1,53 +1,41 @@
-// const mongoose = require('mongoose');
-// const bcrypt = require('bcryptjs');
+// models/Room.js
+const redisDataLayer = require('../data/redisDataLayer');
+const bcrypt = require('bcryptjs');
 
-// const RoomSchema = new mongoose.Schema({
-//   name: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   creator: {
-//     type: mongoose.Schema.Types.ObjectId,
-//     ref: 'User',
-//     required: true
-//   },
-//   hasPassword: {
-//     type: Boolean,
-//     default: false
-//   },
-//   password: {
-//     type: String,
-//     select: false
-//   },
-//   createdAt: {
-//     type: Date,
-//     default: Date.now
-//   },
-//   participants: [{
-//     type: mongoose.Schema.Types.ObjectId,
-//     ref: 'User'
-//   }]
-// });
+class Room {
+  constructor(data) {
+    this._id = data.id;
+    this.name = data.name;
+    this.creator = data.creator;
+    this.hasPassword = data.hasPassword;
+    this.createdAt = data.createdAt;
+    this.participants = data.participants || [];
+  }
 
-// // 비밀번호 해싱 미들웨어
-// RoomSchema.pre('save', async function(next) {
-//   if (this.isModified('password') && this.password) {
-//     const salt = await bcrypt.genSalt(10);
-//     this.password = await bcrypt.hash(this.password, salt);
-//     this.hasPassword = true;
-//   }
-//   if (!this.password) {
-//     this.hasPassword = false;
-//   }
-//   next();
-// });
+  static async create({ name, creator, password }) {
+    const roomId = await redisDataLayer.createRoom(name, creator, password);
+    return Room.findById(roomId);
+  }
 
-// // 비밀번호 확인 메서드
-// RoomSchema.methods.checkPassword = async function(password) {
-//   if (!this.hasPassword) return true;
-//   const room = await this.constructor.findById(this._id).select('+password');
-//   return await bcrypt.compare(password, room.password);
-// };
+  static async findById(roomId) {
+    const raw = await redisDataLayer.getRoomById(roomId);
+    if (!raw) return null;
+    return new Room(raw);
+  }
 
-// module.exports = mongoose.model('Room', RoomSchema);
+  async addParticipant(userId) {
+    await redisDataLayer.addParticipant(this._id, userId);
+    this.participants.push(userId);
+  }
+
+  async removeParticipant(userId) {
+    await redisDataLayer.removeParticipant(this._id, userId);
+    this.participants = this.participants.filter(id => id !== userId);
+  }
+
+  async checkPassword(password) {
+    return await redisDataLayer.checkRoomPassword(this._id, password);
+  }
+}
+
+module.exports = Room;
