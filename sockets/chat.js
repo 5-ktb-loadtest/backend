@@ -470,6 +470,7 @@ module.exports = function (io) {
             if (!fileData || !fileData._id) {
               throw new Error('파일 데이터가 올바르지 않습니다.');
             }
+            let file;
 
             // S3 파일 처리
             if (fileData.isS3File || fileData.s3Uploaded || fileData.alreadyUploaded) {
@@ -480,7 +481,6 @@ module.exports = function (io) {
               //   url: fileData.url,
               //   isS3File: true
               // });
-              let file;
               // S3 파일 메타데이터 직접 생성/조회
               try {
                   // S3 파일 메타데이터 생성
