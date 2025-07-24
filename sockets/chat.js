@@ -473,14 +473,14 @@ module.exports = function(io) {
         }
 
         // 세션 유효성 재확인
-        const sessionValidation = await SessionService.validateSession(
-          socket.user.id, 
-          socket.user.sessionId
-        );
+        // const sessionValidation = await SessionService.validateSession(
+        //   socket.user.id, 
+        //   socket.user.sessionId
+        // );
         
-        if (!sessionValidation.isValid) {
-          throw new Error('세션이 만료되었습니다. 다시 로그인해주세요.');
-        }
+        // if (!sessionValidation.isValid) {
+        //   throw new Error('세션이 만료되었습니다. 다시 로그인해주세요.');
+        // }
 
         // AI 멘션 확인
         const aiMentions = extractAIMentions(content);
