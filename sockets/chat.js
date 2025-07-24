@@ -1,27 +1,23 @@
-const Message = require('../models/Message');
-const roomRedis = require('../services/redis/roomRedis');
-const User = require('../models/User');
-const FileModel = require('../models/File');  
+const redisDataLayer = require('../data/redisDataLayer');
 const jwt = require('jsonwebtoken');
 const { jwtSecret } = require('../config/keys');
 const redisClient = require('../utils/redisClient');
 const SessionService = require('../services/sessionService');
 const aiService = require('../services/aiService');
 
-// Redis key helpers
 const getConnectedUserKey = (userId) => `connected_user:${userId}`;
 const getUserRoomKey = (userId) => `user_room:${userId}`;
 const getRoomUsersKey = (roomId) => `room_users:${roomId}`;
 
-module.exports = function(io) {
+module.exports = function (io) {
   const messageQueues = new Map();
   const messageLoadRetries = new Map();
-  const BATCH_SIZE = 30;  // 한 번에 로드할 메시지 수
-  const LOAD_DELAY = 300; // 메시지 로드 딜레이 (ms)
-  const MAX_RETRIES = 3;  // 최대 재시도 횟수
-  const MESSAGE_LOAD_TIMEOUT = 10000; // 메시지 로드 타임아웃 (10초)
-  const RETRY_DELAY = 2000; // 재시도 간격 (2초)
-  const DUPLICATE_LOGIN_TIMEOUT = 10000; // 중복 로그인 타임아웃 (10초)
+  const BATCH_SIZE = 30;
+  const LOAD_DELAY = 300;
+  const MAX_RETRIES = 3;
+  const MESSAGE_LOAD_TIMEOUT = 10000;
+  const RETRY_DELAY = 2000;
+  const DUPLICATE_LOGIN_TIMEOUT = 10000;
 
   // 로깅 유틸리티 함수
   const logDebug = (action, data) => {
@@ -38,80 +34,73 @@ module.exports = function(io) {
         reject(new Error('Message loading timed out'));
       }, MESSAGE_LOAD_TIMEOUT);
     });
-
+  
     try {
-      // 쿼리 구성
-      const query = { room: roomId };
-      if (before) {
-        query.timestamp = { $lt: new Date(before) };
-      }
-
-      // 메시지 로드 with profileImage
-      const messages = await Promise.race([
-        Message.find(query)
-          .populate('sender', 'name email profileImage')
-          .populate({
-            path: 'file',
-            select: 'filename originalname mimetype size'
-          })
-          .sort({ timestamp: -1 })
-          .limit(limit + 1)
-          .lean(),
+      const beforeTimestamp = before ? new Date(before).getTime() : null;
+      const result = await Promise.race([
+        redisDataLayer.getMessagesForRoom(roomId, beforeTimestamp, limit),
         timeoutPromise
       ]);
-
-      // 결과 처리
-      const hasMore = messages.length > limit;
-      const resultMessages = messages.slice(0, limit);
-      const sortedMessages = resultMessages.sort((a, b) =>
-        new Date(a.timestamp) - new Date(b.timestamp)
-      );
-
-      // 읽음 상태 비동기 업데이트
-      if (sortedMessages.length > 0 && socket.user) {
-        const messageIds = sortedMessages.map(msg => msg._id);
-        Message.updateMany(
-          {
-            _id: { $in: messageIds },
-            'readers.userId': { $ne: socket.user.id }
-          },
-          {
-            $push: {
-              readers: {
-                userId: socket.user.id,
-                readAt: new Date()
-              }
-            }
+  
+      const { messages, hasMore, oldestTimestamp } = result;
+  
+      // sender 정보 로딩 추가
+      const enhancedMessages = await Promise.all(messages.map(async (msg) => {
+        // sender 정보 로딩
+        if (msg.sender && msg.sender !== 'system') {
+          const senderUser = await redisDataLayer.getUserById(msg.sender);
+          msg.sender = senderUser ? {
+            _id: senderUser.id,
+            name: senderUser.name,
+            email: senderUser.email,
+            profileImage: senderUser.profileImage
+          } : { _id: 'unknown', name: '알 수 없음', email: '', profileImage: '' };
+        }
+  
+        // file 정보 로딩 (필요한 경우)
+        if (msg.type === 'file' && msg.file) {
+          const file = await redisDataLayer.getFile(msg.file);
+          if (file) {
+            msg.file = {
+              _id: file._id,
+              filename: file.filename,
+              originalname: file.originalname,
+              mimetype: file.mimetype,
+              size: file.size
+            };
           }
-        ).exec().catch(error => {
-          console.error('Read status update error:', error);
-        });
+        }
+  
+        return msg;
+      }));
+  
+      // 읽음 상태 업데이트
+      if (messages.length > 0 && socket.user) {
+        const messageIds = messages.map(msg => msg._id);
+        await redisDataLayer.markMessagesAsRead(socket.user.id, roomId, messageIds);
       }
-
-      return {
-        messages: sortedMessages,
-        hasMore,
-        oldestTimestamp: sortedMessages[0]?.timestamp || null
+  
+      return { 
+        messages: enhancedMessages, 
+        hasMore, 
+        oldestTimestamp: oldestTimestamp ? new Date(oldestTimestamp) : null 
       };
     } catch (error) {
       if (error.message === 'Message loading timed out') {
-        logDebug('message load timeout', {
-          roomId,
-          before,
-          limit
-        });
+        logDebug('message load timeout', { roomId, before, limit });
       } else {
         console.error('Load messages error:', {
           error: error.message,
           stack: error.stack,
           roomId,
           before,
-          limit
+          limit,
         });
       }
       throw error;
     }
   };
+
 
   // 재시도 로직을 포함한 메시지 로드 함수
   const loadMessagesWithRetry = async (socket, roomId, before, retryCount = 0) => {
@@ -215,13 +204,13 @@ module.exports = function(io) {
         return next(new Error(validationResult.message || 'Invalid session'));
       }
 
-      const user = await User.findById(decoded.user.id);
+      const user = await redisDataLayer.getUserById(decoded.user.id);
       if (!user) {
         return next(new Error('User not found'));
       }
 
       socket.user = {
-        id: user._id.toString(),
+        id: user.id,
         name: user.name,
         email: user.email,
         sessionId: sessionId,
@@ -291,12 +280,6 @@ module.exports = function(io) {
           throw new Error('Unauthorized');
         }
 
-        // 권한 체크
-      const isParticipant = await roomRedis.isParticipant(roomId, socket.user.id);
-      if (!isParticipant) {
-        throw new Error('채팅방 접근 권한이 없습니다.');
-      }
-
         if (messageQueues.get(queueKey)) {
           logDebug('message load skipped - already loading', {
             roomId,
@@ -357,8 +340,10 @@ module.exports = function(io) {
             roomId: currentRoom
           });
           socket.leave(currentRoom);
-          await redisClient.del(getUserRoomKey(socket.user.id));
-          await redisClient.client.sRem(getRoomUsersKey(currentRoom), socket.user.id);
+          const pipeline = redisClient.cluster.pipeline();
+          pipeline.del(getUserRoomKey(socket.user.id));
+          pipeline.srem(getRoomUsersKey(currentRoom), socket.user.id);
+          await pipeline.exec();
 
           socket.to(currentRoom).emit('userLeft', {
             userId: socket.user.id,
@@ -366,32 +351,30 @@ module.exports = function(io) {
           });
         }
 
+        
         // 방 참여자 목록에 추가
-        await redisClient.set(getUserRoomKey(socket.user.id), roomId);
-        await redisClient.client.sAdd(getRoomUsersKey(roomId), socket.user.id);
-
-        // 채팅방 참가 with profileImage
-        const room = await roomRedis.getRoom(roomId);
-
-        await roomRedis.addParticipant(roomId, socket.user.id);
-        await redisClient.set(getUserRoomKey(socket.user.id), roomId);
-        await redisClient.client.sAdd(getRoomUsersKey(roomId), socket.user.id);
-
+        let room = await redisDataLayer.getRoomById(roomId);
         if (!room) {
           throw new Error('채팅방을 찾을 수 없습니다.');
+        }
+
+        // 해당 유저 참가자 목록에 추가
+        if (!room.participants.includes(socket.user.id)) {
+          const [_, room] = await Promise.all([
+            redisDataLayer.addParticipant(roomId, socket.user.id),
+            redisDataLayer.getRoomById(roomId)
+          ]);
         }
 
         socket.join(roomId);
 
         // 입장 메시지 생성
-        const joinMessage = new Message({
-          room: roomId,
-          content: `${socket.user.name}님이 입장하였습니다.`,
+        const joinMsgId = await redisDataLayer.createMessage(roomId, {
           type: 'system',
-          timestamp: new Date()
+          content: `${socket.user.name}님이 입장하였습니다.`,
+          sender: 'system'
         });
-
-        await joinMessage.save();
+        const joinMessage = await redisDataLayer.getMessage(joinMsgId);
 
         // 초기 메시지 로드
         const messageLoadResult = await loadMessages(socket, roomId);
@@ -408,37 +391,24 @@ module.exports = function(io) {
         //     timestamp: session.timestamp,
         //     isStreaming: true
         //   }));
-
-        const participantIds = await roomRedis.getParticipants(roomId);
         
-        // 2. MongoDB에서 해당 유저들 정보 조회
-        const userInfos = await User.find({ _id: { $in: participantIds } }).lean();
+        const participantsData = await Promise.all(
+          room.participants.map(async (pid) => {
+            const pu = await redisDataLayer.getUserById(pid);
+            if (pu) {
+              return { _id: pu.id, name: pu.name, email: pu.email, profileImage: pu.profileImage, isAI: false };
+            }
+            return null;
+          })
+        );
+        const participants = participantsData.filter(Boolean);
 
-        // 3. 결과를 userId 기준으로 매핑
-        const userMap = {};
-        userInfos.forEach(user => {
-          userMap[user._id.toString()] = user;
-        });
-
-        // 4. 순서를 Redis에서 받아온 순서대로 정렬
-        const participants = participantIds.map(userId => {
-          const info = userMap[userId];
-          return {
-            _id: userId,
-            name: info?.name || 'Unknown',
-            profileImage: info?.profileImage || null,
-            isAI: false // 기본값, 필요시 로직 수정
-          };
-        });
-
-        // 이벤트 발송
         socket.emit('joinRoomSuccess', {
           roomId,
           participants,
           messages,
           hasMore,
           oldestTimestamp,
-          // activeStreams // 삭제
         });
 
         io.to(roomId).emit('message', joinMessage);
@@ -478,12 +448,6 @@ module.exports = function(io) {
           throw new Error('채팅방 정보가 없습니다.');
         }
 
-        // 채팅방 권한 확인
-        const isParticipant = await roomRedis.isParticipant(room, socket.user.id);
-        if (!isParticipant) {
-          throw new Error('채팅방 접근 권한이 없습니다.');
-        }
-
         // 세션 유효성 재확인
         // const sessionValidation = await SessionService.validateSession(
         //   socket.user.id, 
@@ -498,15 +462,6 @@ module.exports = function(io) {
         // AI 멘션 확인
         const aiMentions = extractAIMentions(content);
         let message;
-
-        logDebug('message received', {
-          type,
-          room,
-          userId: socket.user.id,
-          hasFileData: !!fileData,
-          hasAIMentions: aiMentions.length,
-          isS3File: fileData?.isS3File || fileData?.s3Uploaded
-        });
 
         // 메시지 타입별 처리
         switch (type) {
@@ -607,18 +562,11 @@ module.exports = function(io) {
             break;
 
           case 'text':
-            const messageContent = content?.trim() || messageData.msg?.trim();
-            if (!messageContent) {
-              return;
-            }
-
-            message = new Message({
-              room,
-              sender: socket.user.id,
-              content: messageContent,
+            if (!finalContent || finalContent.length === 0) return;
+            messageId = await redisDataLayer.createMessage(room, {
               type: 'text',
-              timestamp: new Date(),
-              reactions: {}
+              sender: socket.user.id,
+              content: finalContent
             });
             break;
 
@@ -627,22 +575,33 @@ module.exports = function(io) {
         }
 
         // 메시지 저장
-        await message.save();
-
+        // await message.save();
+        const msg = await redisDataLayer.getMessage(messageId);
+        if (!msg) throw new Error('메시지 생성 중 오류 발생');
         // 메시지 populate
-        const populatedMessage = await Message.findById(message._id)
-          .populate('sender', 'name email profileImage')
-          .populate('file', 'filename originalname mimetype size url path isS3File');
+        const senderUser = await redisDataLayer.getUserById(msg.sender);
+        console.log('Sender User:', senderUser);
+        msg.sender = senderUser ? {
+          _id: senderUser.id,
+          name: senderUser.name,
+          email: senderUser.email,
+          profileImage: senderUser.profileImage
+        } : { _id: 'unknown', name: '알 수 없음', email: '', profileImage: '' };
 
+        if (msg.type === 'file' && msg.file) {
+          const f = await redisDataLayer.getFile(msg.file);
+          if (f) {
+            msg.file = {
+              _id: f._id,
+              filename: f.filename,
+              originalname: f.originalname,
+              mimetype: f.mimetype,
+              size: f.size
+            };
+          }
+        }
         // 브로드캐스트
-        io.to(room).emit('message', populatedMessage);
-
-        console.log('Message broadcast successful:', {
-          messageId: populatedMessage._id,
-          type: populatedMessage.type,
-          room: room,
-          hasFile: !!populatedMessage.file
-        });
+        io.to(room).emit('message', msg);
 
         // AI 멘션이 있는 경우 AI 응답 생성
         if (aiMentions.length > 0) {
@@ -654,34 +613,12 @@ module.exports = function(io) {
 
         await SessionService.updateLastActivity(socket.user.id);
 
-        logDebug('message processed successfully', {
-          messageId: message._id,
-          type: message.type,
-          room,
-          isS3File: message.metadata?.isS3File
-        });
 
       } catch (error) {
         console.error('Message handling error:', error);
-
-        // 구체적인 에러 코드와 메시지 제공
-        let errorCode = 'MESSAGE_ERROR';
-        let errorMessage = error.message || '메시지 전송 중 오류가 발생했습니다.';
-
-        if (error.message?.includes('S3')) {
-          errorCode = 'S3_FILE_ERROR';
-          errorMessage = 'S3 파일 처리 중 오류가 발생했습니다. 다시 시도해주세요.';
-        } else if (error.message?.includes('파일을 찾을 수 없거나')) {
-          errorCode = 'FILE_NOT_FOUND';
-          errorMessage = '파일을 찾을 수 없습니다. 파일을 다시 업로드해주세요.';
-        } else if (error.message?.includes('권한')) {
-          errorCode = 'ACCESS_DENIED';
-          errorMessage = '파일 접근 권한이 없습니다.';
-        }
-
         socket.emit('error', {
-          code: errorCode,
-          message: errorMessage
+          code: error.code || 'MESSAGE_ERROR',
+          message: error.message || '메시지 전송 중 오류가 발생했습니다.'
         });
       }
     });
@@ -700,29 +637,23 @@ module.exports = function(io) {
           return;
         }
 
-        const userId = socket.user.id;
-        // 권한 확인
-        const isParticipant = await roomRedis.isParticipant(roomId, userId);
-        if (!isParticipant) {
-          console.log(`User ${userId} is not a participant of room ${roomId}`);
-          return;
-        }
-
         socket.leave(roomId);
-        await redisClient.del(getUserRoomKey(socket.user.id));
-        await redisClient.client.sRem(getRoomUsersKey(roomId), socket.user.id);
+        const pipeline = redisClient.cluster.pipeline();
+        pipeline.del(getUserRoomKey(socket.user.id));
+        pipeline.srem(getRoomUsersKey(roomId), socket.user.id);
+        await pipeline.exec();
 
         // 퇴장 메시지 생성 및 저장
-        const leaveMessage = await Message.create({
-          room: roomId,
-          content: `${socket.user.name}님이 퇴장하였습니다.`,
+        const leaveMsgId = await redisDataLayer.createMessage(roomId, {
           type: 'system',
-          timestamp: new Date()
+          content: `${socket.user.name}님이 퇴장하였습니다.`,
+          sender: 'system'
         });
+        const leaveMessage = await redisDataLayer.getMessage(leaveMsgId);
 
         // 참가자 목록 업데이트 - profileImage 포함
-        await roomRedis.removeParticipant(roomId, userId);
-        const participants = await roomRedis.getParticipants(roomId);
+        await redisDataLayer.removeParticipant(roomId, socket.user.id);
+        const updatedRoom = await redisDataLayer.getRoomById(roomId);
 
         // 스트리밍 세션 정리 (퇴장, disconnect 등에서)
         // for (const [messageId, session] of streamingSessions.entries()) {
@@ -735,6 +666,19 @@ module.exports = function(io) {
         const queueKey = `${roomId}:${socket.user.id}`;
         messageQueues.delete(queueKey);
         messageLoadRetries.delete(queueKey);
+
+        let participants = [];
+        if (updatedRoom) {
+          participants = (await Promise.all(
+            updatedRoom.participants.map(async (pid) => {
+              const pu = await redisDataLayer.getUserById(pid);
+              if (pu) {
+                return { _id: pu.id, name: pu.name, email: pu.email, profileImage: pu.profileImage };
+              }
+              return null;
+            })
+          )).filter(Boolean);
+        }
 
         // 이벤트 발송
         io.to(roomId).emit('message', leaveMessage);
@@ -764,8 +708,10 @@ module.exports = function(io) {
         // 방 정보 삭제
         const roomId = await redisClient.get(getUserRoomKey(socket.user.id));
         if (roomId) {
-          await redisClient.del(getUserRoomKey(socket.user.id));
-          await redisClient.client.sRem(getRoomUsersKey(roomId), socket.user.id);
+          const pipeline = redisClient.cluster.pipeline();
+          pipeline.del(getUserRoomKey(socket.user.id));
+          pipeline.srem(getRoomUsersKey(roomId), socket.user.id);
+          await pipeline.exec();
         }
 
         // 메시지 큐 정리
@@ -787,19 +733,30 @@ module.exports = function(io) {
         if (roomId) {
           // 다른 디바이스로 인한 연결 종료가 아닌 경우에만 처리
           if (reason !== 'client namespace disconnect' && reason !== 'duplicate_login') {
-            const leaveMessage = await Message.create({
-              room: roomId,
-              content: `${socket.user.name}님이 연결이 끊어졌습니다.`,
+            const leaveMsgId = await redisDataLayer.createMessage(roomId, {
               type: 'system',
-              timestamp: new Date()
+              content: `${socket.user.name}님이 연결이 끊어졌습니다.`,
+              sender: 'system'
             });
+            const leaveMessage = await redisDataLayer.getMessage(leaveMsgId);
 
-            await roomRedis.removeParticipant(roomId, userId);
-            const participants = await roomRedis.getParticipants(roomId);
-
-            if (participants) {
+            await redisDataLayer.removeParticipant(roomId, socket.user.id);
+            const updatedRoom = await redisDataLayer.getRoomById(roomId);
+            if (updatedRoom) {
+              const participantsData = (
+                await Promise.all(
+                  updatedRoom.participants.map(async (pid) => {
+                    const pu = await redisDataLayer.getUserById(pid);
+                    if (pu) {
+                      return { _id: pu.id, name: pu.name, email: pu.email, profileImage: pu.profileImage };
+                    }
+                    return null;
+                  })
+                )
+              ).filter(Boolean);
+  
               io.to(roomId).emit('message', leaveMessage);
-              io.to(roomId).emit('participantsUpdate', participants);
+              io.to(roomId).emit('participantsUpdate', participantsData);
             }
           }
         }
@@ -856,21 +813,7 @@ module.exports = function(io) {
         }
 
         // 읽음 상태 업데이트
-        await Message.updateMany(
-          {
-            _id: { $in: messageIds },
-            room: roomId,
-            'readers.userId': { $ne: socket.user.id }
-          },
-          {
-            $push: {
-              readers: {
-                userId: socket.user.id,
-                readAt: new Date()
-              }
-            }
-          }
-        );
+        await redisDataLayer.markMessagesAsRead(socket.user.id, roomId, messageIds);
 
         socket.to(roomId).emit('messagesRead', {
           userId: socket.user.id,
@@ -892,22 +835,23 @@ module.exports = function(io) {
           throw new Error('Unauthorized');
         }
 
-        const message = await Message.findById(messageId);
-        if (!message) {
+        const msg = await redisDataLayer.getMessage(messageId);
+        if (!msg) {
           throw new Error('메시지를 찾을 수 없습니다.');
         }
 
         // 리액션 추가/제거
         if (type === 'add') {
-          await message.addReaction(reaction, socket.user.id);
+          await redisDataLayer.addReaction(messageId, reaction, socket.user.id);
         } else if (type === 'remove') {
-          await message.removeReaction(reaction, socket.user.id);
+          await redisDataLayer.removeReaction(messageId, reaction, socket.user.id);
         }
 
+        const reactions = await redisDataLayer.getReactions(messageId);
         // 업데이트된 리액션 정보 브로드캐스트
-        io.to(message.room).emit('messageReactionUpdate', {
+        io.to(msg.room).emit('messageReactionUpdate', {
           messageId,
-          reactions: message.reactions
+          reactions
         });
 
       } catch (error) {
@@ -942,14 +886,6 @@ module.exports = function(io) {
     const messageId = `${aiName}-${Date.now()}`;
     const timestamp = new Date();
 
-    
-    logDebug('AI response started', {
-      messageId,
-      aiType: aiName,
-      room,
-      query
-    });
-
     // 초기 상태 전송
     io.to(room).emit('aiMessageStart', {
       messageId,
@@ -969,13 +905,10 @@ module.exports = function(io) {
       
         onComplete: async (finalContent) => {
           // AI 메시지 저장
-          const aiMessage = await Message.create({
-            room,
-            content: finalContent.content,
+          const aiMsgId = await redisDataLayer.createMessage(room, {
             type: 'ai',
             aiType: aiName,
-            timestamp: new Date(),
-            reactions: {},
+            content: finalContent.content,
             metadata: {
               query,
               generationTime: Date.now() - timestamp,
@@ -983,6 +916,8 @@ module.exports = function(io) {
               totalTokens: finalContent.totalTokens
             }
           });
+
+          const aiMessage = await redisDataLayer.getMessage(aiMsgId);
 
           // 완료 메시지 전송
           io.to(room).emit('aiMessageComplete', {
@@ -1026,12 +961,6 @@ module.exports = function(io) {
         messageId,
         error: error.message || 'AI 서비스 오류가 발생했습니다.',
         aiType: aiName
-      });
-
-      logDebug('AI service error', {
-        messageId,
-        aiType: aiName,
-        error: error.message
       });
     }
   }
