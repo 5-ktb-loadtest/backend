@@ -13,8 +13,7 @@ const getConnectedUserKey = (userId) => `connected_user:${userId}`;
 const getUserRoomKey = (userId) => `user_room:${userId}`;
 const getRoomUsersKey = (roomId) => `room_users:${roomId}`;
 
-module.exports = function (io) {
-  const streamingSessions = new Map();
+module.exports = function(io) {
   const messageQueues = new Map();
   const messageLoadRetries = new Map();
   const BATCH_SIZE = 30;  // 한 번에 로드할 메시지 수
@@ -405,17 +404,17 @@ module.exports = function (io) {
         const messageLoadResult = await loadMessages(socket, roomId);
         const { messages, hasMore, oldestTimestamp } = messageLoadResult;
 
-        // 활성 스트리밍 메시지 조회
-        const activeStreams = Array.from(streamingSessions.values())
-          .filter(session => session.room === roomId)
-          .map(session => ({
-            _id: session.messageId,
-            type: 'ai',
-            aiType: session.aiType,
-            content: session.content,
-            timestamp: session.timestamp,
-            isStreaming: true
-          }));
+        // 활성 스트리밍 메시지 조회 (삭제)
+        // const activeStreams = Array.from(streamingSessions.values())
+        //   .filter(session => session.room === roomId)
+        //   .map(session => ({
+        //     _id: session.messageId,
+        //     type: 'ai',
+        //     aiType: session.aiType,
+        //     content: session.content,
+        //     timestamp: session.timestamp,
+        //     isStreaming: true
+        //   }));
 
         // 이벤트 발송
         socket.emit('joinRoomSuccess', {
@@ -424,7 +423,7 @@ module.exports = function (io) {
           messages,
           hasMore,
           oldestTimestamp,
-          activeStreams
+          // activeStreams // 삭제
         });
 
         io.to(roomId).emit('message', joinMessage);
@@ -738,12 +737,12 @@ module.exports = function (io) {
           return;
         }
 
-        // 스트리밍 세션 정리
-        for (const [messageId, session] of streamingSessions.entries()) {
-          if (session.room === roomId && session.userId === socket.user.id) {
-            streamingSessions.delete(messageId);
-          }
-        }
+        // 스트리밍 세션 정리 (퇴장, disconnect 등에서)
+        // for (const [messageId, session] of streamingSessions.entries()) {
+        //   if (session.room === roomId && session.userId === socket.user.id) {
+        //     streamingSessions.delete(messageId);
+        //   }
+        // }
 
         // 메시지 큐 정리
         const queueKey = `${roomId}:${socket.user.id}`;
@@ -788,13 +787,13 @@ module.exports = function (io) {
           messageQueues.delete(key);
           messageLoadRetries.delete(key);
         });
-
+        
         // 스트리밍 세션 정리
-        for (const [messageId, session] of streamingSessions.entries()) {
-          if (session.userId === socket.user.id) {
-            streamingSessions.delete(messageId);
-          }
-        }
+        // for (const [messageId, session] of streamingSessions.entries()) {
+        //   if (session.userId === socket.user.id) {
+        //     streamingSessions.delete(messageId);
+        //   }
+        // }
 
         // 현재 방에서 자동 퇴장 처리
         if (roomId) {
@@ -996,9 +995,6 @@ module.exports = function (io) {
         },
       
         onComplete: async (finalContent) => {
-          // 스트리밍 세션 정리
-          streamingSessions.delete(messageId);
-
           // AI 메시지 저장
           const aiMessage = await Message.create({
             room,
@@ -1035,7 +1031,6 @@ module.exports = function (io) {
           });
         },
         onError: (error) => {
-          streamingSessions.delete(messageId);
           console.error('AI response error:', error);
 
           io.to(room).emit('aiMessageError', {
@@ -1052,7 +1047,6 @@ module.exports = function (io) {
         }
       });
     } catch (error) {
-      streamingSessions.delete(messageId);
       console.error('AI service error:', error);
 
       io.to(room).emit('aiMessageError', {
