@@ -1,7 +1,7 @@
 const Message = require('../models/Message');
 const roomRedis = require('../services/redis/roomRedis');
 const User = require('../models/User');
-const File = require('../models/File');
+const FileModel = require('../models/File');  
 const jwt = require('jsonwebtoken');
 const { jwtSecret } = require('../config/keys');
 const redisClient = require('../utils/redisClient');
@@ -529,7 +529,7 @@ module.exports = function(io) {
               // S3 파일 메타데이터 직접 생성/조회
               try {
                 // 기존 파일 레코드가 있는지 확인
-                file = await File.findById(fileData._id);
+                file = await FileModel.findById(fileData._id);
 
                 if (!file) {
                   // S3 파일 메타데이터 생성

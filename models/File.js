@@ -34,13 +34,13 @@ class FileModel {
       s3Bucket: fileData.s3Bucket,
       url: fileData.url
     });
-    return File.findById(fileId);
+    return FileModel.findById(fileId);
   }
 
   static async findById(fileId) {
     const raw = await redisDataLayer.getFile(fileId);
     if (!raw) return null;
-    return new File(raw);
+    return new FileModel(raw);
   }
 
   static async findOne(query) {
@@ -48,7 +48,7 @@ class FileModel {
     if (query.filename) {
       const file = await redisDataLayer.findFileByFilename(query.filename);
       if (!file) return null;
-      return new File(file);
+      return new FileModel(file);
     }
     // 기타 쿼리도 필요시 구현
     return null;

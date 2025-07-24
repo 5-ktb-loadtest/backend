@@ -288,19 +288,27 @@ async function getReactions(messageId) {
 }
 
 // File 관련
-async function createFile({ filename, originalname, mimetype, size, userId, path }) {
+async function createFile({ filename, originalname, mimetype, size, user, path, 
+    uploadDate, destination = '', isS3File = false, s3Key = '', s3Bucket = '', url = ''}) {
     const fileId = uuidv4();
     const fileData = {
         filename,
         originalname,
         mimetype,
         size: String(size),
-        user: userId,
+        user,
         path,
-        uploadDate: Date.now().toString()
+        uploadDate: uploadDate || Date.now().toString(),
+        destination,
+        isS3File: isS3File ? '1' : '0',
+        s3Key,
+        s3Bucket,
+        url
     };
 
     await redisClient.hSet(`file:${fileId}`, fileData);
+    // FileModel의 findOne용 인덱스 추가
+    await redisClient.set(`filename_to_fileid:${filename}`, fileId);
     return fileId;
 }
 
@@ -316,12 +324,27 @@ async function getFile(fileId) {
         size: parseInt(file.size, 10),
         user: file.user,
         path: file.path,
-        uploadDate: new Date(parseInt(file.uploadDate, 10))
+        uploadDate: new Date(parseInt(file.uploadDate, 10)),
+        destination: file.destination || '',
+        isS3File: file.isS3File === '1',
+        s3Key: file.s3Key || '',
+        s3Bucket: file.s3Bucket || '',
+        url: file.url || ''
     };
 }
 
 async function deleteFile(fileId) {
     await redisClient.del(`file:${fileId}`);
+    const file = await getFile(fileId);
+    if (file?.filename) {
+        await redisClient.del(`filename_to_fileid:${file.filename}`);
+    }
+}
+
+async function findFileByFilename(filename) {
+    const fileId = await redisClient.get(`filename_to_fileid:${filename}`);
+    if (!fileId) return null;
+    return await getFile(fileId);
 }
 
 module.exports = {
@@ -329,5 +352,5 @@ module.exports = {
     createRoom, getRoomById, addParticipant, removeParticipant, checkRoomPassword,
     createMessage, getMessage, getMessagesForRoom, updateMessage, markMessagesAsRead,
     addReaction, removeReaction, getReactions, getAllRoomIds,
-    createFile, getFile, deleteFile
+    createFile, getFile, deleteFile, findFileByFilename
 };

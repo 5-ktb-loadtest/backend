@@ -1,4 +1,4 @@
-const File = require('../models/File');
+const FileModel = require('../models/File');
 const Message = require('../models/Message');
 const roomRedis = require('../services/redis/roomRedis');
 const { processFileForRAG } = require('../services/fileService');
@@ -51,7 +51,7 @@ const getFileFromRequest = async (req) => {
 
     await fsPromises.access(filePath, fs.constants.R_OK);
 
-    const file = await File.findOne({ filename: filename });
+    const file = await FileModel.findOne({ filename: filename });
     if (!file) {
       throw new Error('File not found in database');
     }
@@ -68,7 +68,6 @@ const getFileFromRequest = async (req) => {
       throw new Error('Unauthorized access');
     }
 
-
     return { file, filePath };
   } catch (error) {
     console.error('getFileFromRequest error:', {
@@ -81,58 +80,70 @@ const getFileFromRequest = async (req) => {
 
 exports.uploadFile = async (req, res) => {
   try {
-    if (!req.file) {
+    const {
+      _id,
+      filename,
+      originalname,
+      mimetype,
+      size,
+      url,
+      path,
+      key,
+      bucket,
+      uploadedAt,
+      isS3File
+    } = req.body;
+
+    if (!filename || !url || !mimetype || !size) {
       return res.status(400).json({
         success: false,
-        message: '파일이 선택되지 않았습니다.'
+        message: '필수 파일 메타데이터가 누락되었습니다.'
       });
     }
 
-    const safeFilename = generateSafeFilename(req.file.originalname);
-    const currentPath = req.file.path;
-    const newPath = path.join(uploadDir, safeFilename);
-
-    const file = new File({
-      filename: safeFilename,
-      originalname: req.file.originalname,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
+    const fileData = {
+      _id, // optional
+      filename,
+      originalname,
+      mimetype,
+      size: Number(size),
       user: req.user.id,
-      path: newPath
-    });
+      path: path || url,
+      url,
+      isS3File: isS3File === 'true' || isS3File === true,  // ✅ string → boolean 처리
+      s3Key: key || path,                                 // ✅ 프론트에서 보낸 key 또는 path
+      s3Bucket: bucket || process.env.NEXT_PUBLIC_S3_BUCKET_NAME,
+      destination: 'S3',
+      uploadDate: uploadedAt ? new Date(uploadedAt) : new Date()
+    };
 
-    await file.save();
-    await fsPromises.rename(currentPath, newPath);
+    const file = await FileModel.createFile(fileData);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: '파일 업로드 성공',
+      message: 'S3 파일 메타데이터 저장 성공',
       file: {
         _id: file._id,
         filename: file.filename,
         originalname: file.originalname,
         mimetype: file.mimetype,
         size: file.size,
-        uploadDate: file.uploadDate
+        uploadDate: file.uploadDate,
+        isS3File: file.isS3File,
+        s3Key: file.s3Key,
+        url: file.url
       }
     });
-
   } catch (error) {
-    console.error('File upload error:', error);
-    if (req.file?.path) {
-      try {
-        await fsPromises.unlink(req.file.path);
-      } catch (unlinkError) {
-        console.error('Failed to delete uploaded file:', unlinkError);
-      }
-    }
-    res.status(500).json({
+    console.error('S3 파일 메타데이터 저장 오류:', error);
+    return res.status(500).json({
       success: false,
-      message: '파일 업로드 중 오류가 발생했습니다.',
+      message: '파일 저장 중 오류가 발생했습니다.',
       error: error.message
     });
   }
 };
+
 
 exports.downloadFile = async (req, res) => {
   try {
@@ -248,40 +259,43 @@ const handleFileError = (error, res) => {
 
 exports.deleteFile = async (req, res) => {
   try {
-    const file = await File.findById(req.params.id);
-    
+    const file = await FileModel.findById(req.params.id);
     if (!file) {
       return res.status(404).json({
         success: false,
         message: '파일을 찾을 수 없습니다.'
       });
     }
-
-    if (file.user.toString() !== req.user.id) {
+    
+    if (file.user !== req.user.id) {
       return res.status(403).json({
         success: false,
         message: '파일을 삭제할 권한이 없습니다.'
       });
     }
-
-    const filePath = path.join(uploadDir, file.filename);
-
-    if (!isPathSafe(filePath, uploadDir)) {
-      return res.status(403).json({
-        success: false,
-        message: '잘못된 파일 경로입니다.'
-      });
+    
+    // 로컬 파일 삭제는 S3 아닌 경우만
+    if (!file.isS3File) {
+      const filePath = path.join(uploadDir, file.filename);
+    
+      if (!isPathSafe(filePath, uploadDir)) {
+        return res.status(403).json({
+          success: false,
+          message: '잘못된 파일 경로입니다.'
+        });
+      }
+    
+      try {
+        await fsPromises.access(filePath, fs.constants.W_OK);
+        await fsPromises.unlink(filePath);
+      } catch (unlinkError) {
+        console.error('File deletion error:', unlinkError);
+      }
     }
     
-    try {
-      await fsPromises.access(filePath, fs.constants.W_OK);
-      await fsPromises.unlink(filePath);
-    } catch (unlinkError) {
-      console.error('File deletion error:', unlinkError);
-    }
-
-    await file.deleteOne();
-
+    // Redis에서 삭제
+    await file.remove();
+    
     res.json({
       success: true,
       message: '파일이 삭제되었습니다.'
