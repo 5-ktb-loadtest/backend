@@ -313,11 +313,11 @@ async function createFile({ filename, originalname, mimetype, size, user, path,
 }
 
 async function getFile(fileId) {
-    print("fileId 값:")
-    print(fileId)
+    console.log('fileId 값:');
+    console.log(fileId);
     const file = await redisClient.hGetAll(`file:${fileId}`);
-    print("file 값:")
-    print(file)
+    console.log('file 값:');
+    console.log(file);
     if (!file || Object.keys(file).length === 0) return null;
 
     return {
