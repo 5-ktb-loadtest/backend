@@ -471,8 +471,6 @@ module.exports = function (io) {
               throw new Error('파일 데이터가 올바르지 않습니다.');
             }
 
-            let file;
-
             // S3 파일 처리
             if (fileData.isS3File || fileData.s3Uploaded || fileData.alreadyUploaded) {
               console.log('Processing S3 file:', {
@@ -481,7 +479,7 @@ module.exports = function (io) {
                 url: fileData.url,
                 isS3File: true
               });
-
+              let file;
               // S3 파일 메타데이터 직접 생성/조회
               try {
                 // 기존 파일 레코드가 있는지 확인
@@ -489,30 +487,26 @@ module.exports = function (io) {
 
                 if (!file) {
                   // S3 파일 메타데이터 생성
-                  file = new File({
+                  const newFile = await FileModel.createFile({
                     _id: fileData._id,
                     filename: fileData.filename,
                     originalname: fileData.originalname,
                     mimetype: fileData.mimetype,
                     size: fileData.size,
                     path: fileData.url, // S3 URL
-                    url: fileData.url,   // S3 URL
+                    url: fileData.url,
                     destination: 'S3',
-                    fieldname: 'file',
-                    encoding: '7bit',
-                    user: socket.user.id, // 업로드한 사용자
-                    // S3 특화 필드들
-                    key: fileData.key || fileData.s3Key,
-                    bucket: fileData.bucket || process.env.S3_BUCKET_NAME,
-                    uploadedAt: fileData.uploadedAt ? new Date(fileData.uploadedAt) : new Date(),
-                    isS3File: true
+                    user: socket.user.id,
+                    isS3File: true,
+                    s3Key: fileData.key || fileData.s3Key,
+                    s3Bucket: fileData.bucket || process.env.S3_BUCKET_NAME,
+                    uploadDate: fileData.uploadedAt ? new Date(fileData.uploadedAt) : new Date()
                   });
 
-                  await file.save();
                   console.log('S3 file metadata saved:', {
-                    fileId: file._id,
-                    url: file.url,
-                    originalname: file.originalname
+                    fileId: newFile._id,
+                    url: newFile.url,
+                    originalname: newFile.originalname
                   });
                 }
               } catch (fileError) {
@@ -524,10 +518,7 @@ module.exports = function (io) {
               // 로컬 파일 처리 (기존 로직)
               console.log('Processing local file:', fileData._id);
 
-              file = await File.findOne({
-                _id: fileData._id,
-                user: socket.user.id
-              });
+              file = await FileModel.findById(fileData._id);
 
               if (!file) {
                 throw new Error('파일을 찾을 수 없거나 접근 권한이 없습니다.');
