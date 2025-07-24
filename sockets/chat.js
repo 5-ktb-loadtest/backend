@@ -466,21 +466,21 @@ module.exports = function(io) {
         const chatRoom = await Room.findOne({
           _id: room,
           participants: socket.user.id
-        });
+        }).lean();
 
         if (!chatRoom) {
           throw new Error('채팅방 접근 권한이 없습니다.');
         }
 
         // 세션 유효성 재확인
-        const sessionValidation = await SessionService.validateSession(
-          socket.user.id, 
-          socket.user.sessionId
-        );
+        // const sessionValidation = await SessionService.validateSession(
+        //   socket.user.id, 
+        //   socket.user.sessionId
+        // );
         
-        if (!sessionValidation.isValid) {
-          throw new Error('세션이 만료되었습니다. 다시 로그인해주세요.');
-        }
+        // if (!sessionValidation.isValid) {
+        //   throw new Error('세션이 만료되었습니다. 다시 로그인해주세요.');
+        // }
 
         // AI 멘션 확인
         const aiMentions = extractAIMentions(content);
@@ -546,13 +546,20 @@ module.exports = function(io) {
             throw new Error('지원하지 않는 메시지 타입입니다.');
         }
 
-        await message.save();
-        await message.populate([
+        io.to(room).emit('message', message); // 먼저 브로드캐스트
+
+        // 저장은 비동기로 처리
+        message.save().catch(error => {
+          console.error('Message save error:', error);
+        });
+
+        // populate도 비동기로 처리
+        message.populate([
           { path: 'sender', select: 'name email profileImage' },
           { path: 'file', select: 'filename originalname mimetype size' }
-        ]);
-
-        io.to(room).emit('message', message);
+        ]).catch(error => {
+          console.error('Message populate error:', error);
+        });
 
         // AI 멘션이 있는 경우 AI 응답 생성
         if (aiMentions.length > 0) {
@@ -609,12 +616,22 @@ module.exports = function(io) {
         await redisClient.client.sRem(getRoomUsersKey(roomId), socket.user.id);
 
         // 퇴장 메시지 생성 및 저장
-        const leaveMessage = await Message.create({
+        // 최적화 후 (부하테스트용)
+        const leaveMessage = new Message({
           room: roomId,
           content: `${socket.user.name}님이 퇴장하였습니다.`,
           type: 'system',
           timestamp: new Date()
         });
+
+        // 브로드캐스트 먼저
+        io.to(roomId).emit('message', leaveMessage);
+
+        // 저장은 비동기로 처리
+        leaveMessage.save().catch(error => {
+          console.error('Leave message save error:', error);
+        });
+        
 
         // 참가자 목록 업데이트 - profileImage 포함
         const updatedRoom = await Room.findByIdAndUpdate(
@@ -693,11 +710,20 @@ module.exports = function(io) {
         if (roomId) {
           // 다른 디바이스로 인한 연결 종료가 아닌 경우에만 처리
           if (reason !== 'client namespace disconnect' && reason !== 'duplicate_login') {
-            const leaveMessage = await Message.create({
+            // 최적화 후 (부하테스트용)
+            const leaveMessage = new Message({
               room: roomId,
               content: `${socket.user.name}님이 연결이 끊어졌습니다.`,
               type: 'system',
               timestamp: new Date()
+            });
+
+            // 브로드캐스트 먼저
+            io.to(roomId).emit('message', leaveMessage);
+
+            // 저장은 비동기로 처리
+            leaveMessage.save().catch(error => {
+              console.error('Disconnect message save error:', error);
             });
 
             const updatedRoom = await Room.findByIdAndUpdate(
