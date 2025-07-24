@@ -58,8 +58,7 @@ const FileSchema = new mongoose.Schema({
     min: 0
   },
   user: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    type: String,
     required: true,
     index: true
   },

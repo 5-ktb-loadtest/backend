@@ -2,6 +2,8 @@
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const redis = require('../../utils/redisClient'); // ioredis 클라이언트 인스턴스
+const userKey = (id) => `user:${id}`;
+
 
 const ROOM_PREFIX = 'room';
 
@@ -52,19 +54,37 @@ exports.getRoom = async (roomId) => {
       redis.hGetAll(getRoomKey(roomId)),
       redis.sMembers(getParticipantsKey(roomId))
     ]);
+    const creatorInfo = await redis.hGetAll(userKey(room.creator));
 
     if (!room || Object.keys(room).length === 0) return null;
 
+    const participants = await Promise.all(
+      participantIds.map(async (id) => {
+        const user = await redis.hGetAll(userKey(id));
+        return {
+          _id: id,
+          name: user.name || '',
+          email: user.email || ''
+        };
+      })
+    );
+
     return {
-      ...room,
+      _id: roomId,
+      name: room.name,
+      hasPassword: room.hasPassword === 'true',
+      creator: {
+        _id: room.creator,
+        name: creatorInfo.name || '',
+        email: creatorInfo.email || ''
+      },
       createdAt: new Date(Number(room.createdAt)),
-      participants: participantIds
+      participants
     };
   } catch (err) {
-    // console.error(`Failed to get room ${roomId}:`, err);
     return null;
   }
-};  
+};
 
 exports.getParticipants = async (roomId) => {
   return await redis.sMembers(`room:${roomId}:participants`);
@@ -98,22 +118,42 @@ exports.getPaginatedRooms = async ({ page = 0, pageSize = 10 }) => {
   const rooms = await Promise.all(
     roomIds.map(async (roomId) => {
       const room = await redis.hGetAll(getRoomKey(roomId));
-      if (!room || Object.keys(room).length === 0) return null;
-
-      const participants = await redis.sMembers(getParticipantsKey(roomId));
-
+  
+      if (!room || Object.keys(room).length === 0) {
+        await redis.zRem('room:list', roomId); // 정리
+        return null;
+      }
+  
+      const creatorInfo = await redis.hGetAll(userKey(room.creator));  // ❗이제야 안전
+      if (!creatorInfo || Object.keys(creatorInfo).length === 0) return null;
+  
+      const participantIds = await redis.sMembers(getParticipantsKey(roomId));
+      const participants = await Promise.all(
+        participantIds.map(async (id) => {
+          const user = await redis.hGetAll(userKey(id));
+          return {
+            _id: id,
+            name: user.name || '',
+            email: user.email || ''
+          };
+        })
+      );
+  
       return {
         _id: roomId,
         name: room.name,
         hasPassword: room.hasPassword === 'true',
-        creator: room.creator,
+        creator: {
+          _id: room.creator || '',
+          name: creatorInfo.name || '',
+          email: creatorInfo.email || ''
+        },
         participants,
         participantsCount: participants.length,
-        createdAt: room.createdAt
+        createdAt: new Date(Number(room.createdAt))
       };
     })
   );
-
   // null 필터링
   const filteredRooms = rooms.filter(r => r !== null);
 

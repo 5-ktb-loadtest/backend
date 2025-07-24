@@ -1,4 +1,4 @@
-const User = require('../models/User');
+const userRedis = require('../services/redis/userRedis');
 const jwt = require('jsonwebtoken');
 const { jwtSecret } = require('../config/keys');
 const SessionService = require('../services/sessionService');
@@ -33,7 +33,7 @@ const authController = {
       }
       
       // Check existing user
-      const existingUser = await User.findOne({ email });
+      const existingUser = await userRedis.getUserByEmail(email);
       if (existingUser) {
         return res.status(409).json({
           success: false,
@@ -42,13 +42,8 @@ const authController = {
       }
       
       // Create user
-      const user = new User({
-        name,
-        email,
-        password
-      });
+      const user = await userRedis.createUser({ name, email, password });
 
-      await user.save();
       console.log('User created:', user._id);
 
       // Create session with metadata
@@ -120,21 +115,20 @@ const authController = {
       }
 
       // 사용자 조회
-      const user = await User.findOne({ email }).select('+password');
+      const user = await userRedis.getUserByEmail(email);
       if (!user) {
-        return res.status(401).json({
+        return res.status(400).json({
           success: false,
-          message: '이메일 또는 비밀번호가 올바르지 않습니다.'
-        });
+          message: '이메일 또는 비밀번호가 틀렸습니다.'
+        });        
       }
 
-      // 비밀번호 확인
-      const isMatch = await user.matchPassword(password);
+      const isMatch = await userRedis.matchPassword(user._id, password);
       if (!isMatch) {
-        return res.status(401).json({
+        return res.status(400).json({
           success: false,
-          message: '이메일 또는 비밀번호가 올바르지 않습니다.'
-        });
+          message: '이메일 또는 비밀번호가 틀렸습니다.'
+        });        
       }
 
       // 기존 세션 확인 시도
@@ -174,7 +168,7 @@ const authController = {
 
               const handleForceLogin = async (data) => {
                 try {
-                  if (data.token === existingSession.token) {
+                  if (data.token === existingSession.token && data.sessionId === existingSession.sessionId) {
                     // 기존 세션 종료 및 소켓 연결 해제
                     await SessionService.removeSession(user._id, existingSession.sessionId);
                     io.to(existingSession.socketId).emit('session_terminated', {
@@ -364,7 +358,7 @@ const authController = {
       }
 
       // 사용자 정보 조회
-      const user = await User.findById(decoded.user.id);
+      const user = await userRedis.getUserById(decoded.user.id);
       if (!user) {
         return res.status(404).json({
           success: false,
@@ -438,7 +432,32 @@ const authController = {
         });
       }
 
-      const user = await User.findById(req.user.id);
+      const oldToken = req.header('x-auth-token');
+      if (!oldToken) {
+        return res.status(400).json({
+          success: false,
+          message: '토큰이 제공되지 않았습니다.'
+        });
+      }
+
+      let decoded;
+      try {
+        decoded = jwt.verify(oldToken, jwtSecret);
+      } catch (err) {
+        return res.status(401).json({
+          success: false,
+          message: '유효하지 않은 토큰입니다.'
+        });
+      }
+
+      if (decoded.sessionId !== oldSessionId) {
+        return res.status(401).json({
+          success: false,
+          message: '세션 정보가 일치하지 않습니다.'
+        });
+      }
+
+      const user = await userRedis.getUserById(decoded.user.id);
       if (!user) {
         return res.status(404).json({
           success: false,

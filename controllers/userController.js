@@ -1,5 +1,5 @@
 const bcrypt = require('bcryptjs');
-const User = require('../models/User');
+const User = require('../services/redis/userRedis');
 const { upload } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs').promises;
@@ -56,7 +56,7 @@ exports.register = async (req, res) => {
     }
 
     // 사용자 중복 확인
-    const existingUser = await User.findOne({ email });
+    const existingUser = await userRedis.getUserByEmail(email);
     if (existingUser) {
       return res.status(409).json({
         success: false,
@@ -65,16 +65,8 @@ exports.register = async (req, res) => {
     }
 
     // 비밀번호 암호화 및 사용자 생성
-    const newUser = new User({ 
-      name, 
-      email, 
-      password,
-      profileImage: '' // 기본 프로필 이미지 없음
-    });
-
-    const salt = await bcrypt.genSalt(10);
-    newUser.password = await bcrypt.hash(password, salt);
-    await newUser.save();
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newUser = await userRedis.createUser({ name, email, password: hashedPassword });
 
     res.status(201).json({
       success: true,
@@ -99,7 +91,8 @@ exports.register = async (req, res) => {
 // 프로필 조회
 exports.getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    const user = await userRedis.getUserById(req.user.id);
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -138,7 +131,7 @@ exports.updateProfile = async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await userRedis.getUserById(req.user.id);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -146,17 +139,17 @@ exports.updateProfile = async (req, res) => {
       });
     }
 
-    user.name = name.trim();
-    await user.save();
+    await userRedis.updateUser(req.user.id, { name: name.trim() });
+    const updatedUser = await userRedis.getUserById(req.user.id);
 
     res.json({
       success: true,
       message: '프로필이 업데이트되었습니다.',
       user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        profileImage: user.profileImage
+        id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        profileImage: updatedUser.profileImage
       }
     });
 
@@ -183,7 +176,7 @@ exports.changePassword = async (req, res) => {
     }
 
     // 2. 사용자 조회
-    const user = await User.findById(req.user.id).select('+password');
+    const user = await userRedis.getUserById(req.user.id);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -192,7 +185,7 @@ exports.changePassword = async (req, res) => {
     }
 
     // 3. 현재 비밀번호 확인
-    const isMatch = await user.matchPassword(currentPassword);
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
       return res.status(401).json({
         success: false,
@@ -201,8 +194,8 @@ exports.changePassword = async (req, res) => {
     }
 
     // 4. 새 비밀번호 저장
-    user.password = newPassword;
-    await user.save();
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    await userRedis.updateUser(req.user.id, { password: hashedNewPassword });
 
     return res.json({
       success: true,
@@ -251,7 +244,7 @@ exports.uploadProfileImage = async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await userRedis.getUserById(req.user.id);
     if (!user) {
       // 업로드된 파일 삭제
       await fs.unlink(req.file.path);
@@ -274,8 +267,7 @@ exports.uploadProfileImage = async (req, res) => {
 
     // 새 이미지 경로 저장
     const imageUrl = `/uploads/${req.file.filename}`;
-    user.profileImage = imageUrl;
-    await user.save();
+    await userRedis.updateUser(req.user.id, { profileImage: imageUrl });
 
     res.json({
       success: true,
@@ -303,7 +295,7 @@ exports.uploadProfileImage = async (req, res) => {
 // 프로필 이미지 삭제
 exports.deleteProfileImage = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await userRedis.getUserById(req.user.id);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -319,9 +311,7 @@ exports.deleteProfileImage = async (req, res) => {
       } catch (error) {
         console.error('Profile image delete error:', error);
       }
-
-      user.profileImage = '';
-      await user.save();
+      await userRedis.updateUser(req.user.id, { profileImage: '' }); 
     }
 
     res.json({
@@ -341,7 +331,7 @@ exports.deleteProfileImage = async (req, res) => {
 // 회원 탈퇴
 exports.deleteAccount = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await userRedis.getUserById(req.user.id);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -360,7 +350,7 @@ exports.deleteAccount = async (req, res) => {
       }
     }
 
-    await user.deleteOne();
+    await userRedis.deleteUser(req.user.id);
 
     res.json({
       success: true,

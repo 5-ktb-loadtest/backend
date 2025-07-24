@@ -304,13 +304,20 @@ class RedisClient {
   
   async zAdd(key, score, member) {
     if (!this.isConnected) await this.connect();
-    return await this.client.sendCommand(['ZADD', key, score.toString(), member]);
+    return await this.client.sendCommand(['ZADD', key, score.toString(), member.toString()]);
   }
   
   async zRem(key, member) {
     if (!this.isConnected) await this.connect();
     return await this.client.sendCommand(['ZREM', key, member]);
   }
+
+  // utils/redisClient.js
+  async hGet(key, field) {
+    if (!this.isConnected) await this.connect();
+    return await this.client.sendCommand(['HGET', key, field]);
+  }
+
   async hGetAll(key) {
     if (!this.isConnected) await this.connect();
   

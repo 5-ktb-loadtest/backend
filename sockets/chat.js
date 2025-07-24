@@ -1,6 +1,6 @@
 const Message = require('../models/Message');
 const roomRedis = require('../services/redis/roomRedis');
-const User = require('../models/User');
+const userRedis = require('../services/redis/userRedis');
 const File = require('../models/File');
 const jwt = require('jsonwebtoken');
 const { jwtSecret } = require('../config/keys');
@@ -199,6 +199,8 @@ module.exports = function(io) {
         return next(new Error('Invalid token'));
       }
 
+      const userId = decoded.user.id;
+
       // Redis에서 기존 소켓ID 확인
       const existingSocketId = await redisClient.get(getConnectedUserKey(decoded.user.id));
       if (existingSocketId) {
@@ -215,7 +217,7 @@ module.exports = function(io) {
         return next(new Error(validationResult.message || 'Invalid session'));
       }
 
-      const user = await User.findById(decoded.user.id);
+      const user = await userRedis.getUserById(userId);
       if (!user) {
         return next(new Error('User not found'));
       }
@@ -228,7 +230,7 @@ module.exports = function(io) {
         profileImage: user.profileImage
       };
 
-      await SessionService.updateLastActivity(decoded.user.id);
+      await SessionService.updateLastActivity(userId);
       next();
     } catch (error) {
       console.error('Socket authentication error:', error);
@@ -411,13 +413,17 @@ module.exports = function(io) {
 
         const participantIds = await roomRedis.getParticipants(roomId);
         
-        // 2. MongoDB에서 해당 유저들 정보 조회
-        const userInfos = await User.find({ _id: { $in: participantIds } }).lean();
+        // Redis에서 사용자 정보 병렬 조회
+        const userInfos = await Promise.all(
+          participantIds.map((userId) => userRedis.getUserById(userId))
+        );
 
-        // 3. 결과를 userId 기준으로 매핑
+        // 결과를 userId 기준으로 매핑
         const userMap = {};
-        userInfos.forEach(user => {
-          userMap[user._id.toString()] = user;
+        userInfos.forEach((user) => {
+          if (user && user._id) {
+            userMap[user._id] = user;
+          }
         });
 
         // 4. 순서를 Redis에서 받아온 순서대로 정렬

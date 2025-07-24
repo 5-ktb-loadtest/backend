@@ -15,8 +15,7 @@ const MessageSchema = new mongoose.Schema({
     maxlength: [10000, '메시지는 10000자를 초과할 수 없습니다.']
   },
   sender: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'User',
+    type: String,
     index: true 
   },
   type: { 
@@ -50,8 +49,7 @@ const MessageSchema = new mongoose.Schema({
   },
   readers: [{
     userId: { 
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      type: String,
       required: true
     },
     readAt: { 
@@ -63,8 +61,7 @@ const MessageSchema = new mongoose.Schema({
   reactions: {
     type: Map,
     of: [{
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      type: String,
     }],
     default: new Map()
   },
@@ -113,7 +110,7 @@ MessageSchema.statics.markAsRead = async function(messageIds, userId) {
       update: {
         $push: {
           readers: {
-            userId: new mongoose.Types.ObjectId(userId),
+            userId,
             readAt: new Date()
           }
         }

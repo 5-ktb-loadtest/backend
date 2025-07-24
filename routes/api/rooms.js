@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../../middleware/auth');
 const roomRedis = require('../../services/redis/roomRedis');
-const User = require('../../models/User');
+const userRedis = require('../../services/redis/userRedis');
 const { rateLimit } = require('express-rate-limit');
 let io;
 
@@ -108,31 +108,30 @@ router.get('/', [limiter, auth], async (req, res) => {
     });
 
     // 안전한 응답 데이터 구성 
-    const safeRooms = rooms.map(room => {
-      const creator = room.creator || { _id: 'unknown', name: '알 수 없음', email: '' };
-      const participants = Array.isArray(room.participants) ? room.participants : [];
+    const safeRooms = await Promise.all(
+      rooms.map(async (room) => {
+        const creator = await userRedis.getUserById(room.creator);
+        const participants = await userRedis.getUsersByIds(room.participants);
     
-      return {
-        _id: room._id || 'unknown',
-        name: room.name || '제목 없음',
-        hasPassword: !!room.hasPassword,
-        creator: {
-          _id: creator._id || 'unknown',
-          name: creator.name || '알 수 없음',
-          email: creator.email || ''
-        },
-        participants: participants
-          .filter(p => p && p._id)
-          .map(p => ({
+        return {
+          _id: room._id,
+          name: room.name,
+          hasPassword: room.hasPassword === 'true',
+          creator: {
+            _id: creator._id,
+            name: creator.name,
+            profileImage: creator.profileImage
+          },
+          participants: participants.map(p => ({
             _id: p._id,
-            name: p.name || '알 수 없음',
-            email: p.email || ''
+            name: p.name,
+            profileImage: p.profileImage
           })),
-        participantsCount: participants.length,
-        createdAt: new Date(Number(room.createdAt)) || new Date(),
-        isCreator: (creator._id || '') === req.user.id
-      };
-    }).filter(room => room !== null);    
+          participantsCount: participants.length,
+          createdAt: new Date(Number(room.createdAt))
+        };
+      })
+    );    
 
     // 캐시 설정
     res.set({
@@ -189,9 +188,8 @@ router.post('/', auth, async (req, res) => {
       });
     }
 
-    // 수정 시작
     const room = await roomRedis.createRoom({ name: name.trim(), creator: req.user.id, password });
-    const creator = await User.findById(room.creator).select('name email');
+    const creator = await userRedis.getUserById(room.creator);
 
     if (io) {
       io.to('room-list').emit('roomCreated', {
@@ -229,7 +227,7 @@ router.post('/', auth, async (req, res) => {
 // 특정 채팅방 조회
 router.get('/:roomId', auth, async (req, res) => {
   try {
-    const room = await roomRedis.getRoom(req.params.roomId);
+    const room = await roomRedis.getParticipants(req.params.roomId);
 
     if (!room) {
       return res.status(404).json({
@@ -238,10 +236,9 @@ router.get('/:roomId', auth, async (req, res) => {
       });
     }
 
-    const creator = await User.findById(room.creator).select('name email');
+    const creator = await userRedis.getUserById(room.creator);
     const participantIds = await roomRedis.getParticipants(req.params.roomId);
-    const participants = await User.find({ _id: { $in: participantIds } }).select('name email');
-
+    const participants = await userRedis.getUsersByIds(participantIds);
 
     res.json({
       success: true,
@@ -289,10 +286,10 @@ router.post('/:roomId/join', auth, async (req, res) => {
 
     // 참여자 목록에 추가
     await roomRedis.addParticipant(req.params.roomId, req.user.id);
-    const creator = room.creator 
-  ? await User.findById(room.creator).select('name email') 
+    const creator = room.creator
+  ? await userRedis.getUserById(room.creator)
   : null;
-    const participants = await User.find({ _id: { $in: room.participants } }).select('name email');
+const participants = await userRedis.getUsersByIds(room.participants || []);
 
     // Socket.IO를 통해 참여자 업데이트 알림
     if (io) {
