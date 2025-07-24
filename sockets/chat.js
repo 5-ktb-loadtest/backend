@@ -1,5 +1,5 @@
 const Message = require('../models/Message');
-const Room = require('../models/Room');
+const roomRedis = require('../services/redis/roomRedis');
 const User = require('../models/User');
 const File = require('../models/File');
 const jwt = require('jsonwebtoken');
@@ -293,14 +293,10 @@ module.exports = function(io) {
         }
 
         // 권한 체크
-        const room = await Room.findOne({
-          _id: roomId,
-          participants: socket.user.id
-        });
-
-        if (!room) {
-          throw new Error('채팅방 접근 권한이 없습니다.');
-        }
+      const isParticipant = await roomRedis.isParticipant(roomId, socket.user.id);
+      if (!isParticipant) {
+        throw new Error('채팅방 접근 권한이 없습니다.');
+      }
 
         if (messageQueues.get(queueKey)) {
           logDebug('message load skipped - already loading', {
@@ -376,14 +372,11 @@ module.exports = function(io) {
         await redisClient.client.sAdd(getRoomUsersKey(roomId), socket.user.id);
 
         // 채팅방 참가 with profileImage
-        const room = await Room.findByIdAndUpdate(
-          roomId,
-          { $addToSet: { participants: socket.user.id } },
-          { 
-            new: true,
-            runValidators: true 
-          }
-        ).populate('participants', 'name email profileImage');
+        const room = await roomRedis.getRoom(roomId);
+
+        await roomRedis.addParticipant(roomId, socket.user.id);
+        await redisClient.set(getUserRoomKey(socket.user.id), roomId);
+        await redisClient.client.sAdd(getRoomUsersKey(roomId), socket.user.id);
 
         if (!room) {
           throw new Error('채팅방을 찾을 수 없습니다.');
@@ -417,10 +410,32 @@ module.exports = function(io) {
             isStreaming: true
           }));
 
+        const participantIds = await roomRedis.getParticipants(roomId);
+        
+        // 2. MongoDB에서 해당 유저들 정보 조회
+        const userInfos = await User.find({ _id: { $in: participantIds } }).lean();
+
+        // 3. 결과를 userId 기준으로 매핑
+        const userMap = {};
+        userInfos.forEach(user => {
+          userMap[user._id.toString()] = user;
+        });
+
+        // 4. 순서를 Redis에서 받아온 순서대로 정렬
+        const participants = participantIds.map(userId => {
+          const info = userMap[userId];
+          return {
+            _id: userId,
+            name: info?.name || 'Unknown',
+            profileImage: info?.profileImage || null,
+            isAI: false // 기본값, 필요시 로직 수정
+          };
+        });
+
         // 이벤트 발송
         socket.emit('joinRoomSuccess', {
           roomId,
-          participants: room.participants,
+          participants,
           messages,
           hasMore,
           oldestTimestamp,
@@ -428,7 +443,7 @@ module.exports = function(io) {
         });
 
         io.to(roomId).emit('message', joinMessage);
-        io.to(roomId).emit('participantsUpdate', room.participants);
+        io.to(roomId).emit('participantsUpdate', participants);
 
         logDebug('user joined room', {
           userId: socket.user.id,
@@ -463,12 +478,8 @@ module.exports = function(io) {
         }
 
         // 채팅방 권한 확인
-        const chatRoom = await Room.findOne({
-          _id: room,
-          participants: socket.user.id
-        });
-
-        if (!chatRoom) {
+        const isParticipant = await roomRedis.isParticipant(room, socket.user.id);
+        if (!isParticipant) {
           throw new Error('채팅방 접근 권한이 없습니다.');
         }
 
@@ -593,14 +604,11 @@ module.exports = function(io) {
           return;
         }
 
+        const userId = socket.user.id;
         // 권한 확인
-        const room = await Room.findOne({
-          _id: roomId,
-          participants: socket.user.id
-        }).select('participants').lean();
-
-        if (!room) {
-          console.log(`Room ${roomId} not found or user has no access`);
+        const isParticipant = await roomRedis.isParticipant(roomId, userId);
+        if (!isParticipant) {
+          console.log(`User ${userId} is not a participant of room ${roomId}`);
           return;
         }
 
@@ -617,19 +625,8 @@ module.exports = function(io) {
         });
 
         // 참가자 목록 업데이트 - profileImage 포함
-        const updatedRoom = await Room.findByIdAndUpdate(
-          roomId,
-          { $pull: { participants: socket.user.id } },
-          { 
-            new: true,
-            runValidators: true
-          }
-        ).populate('participants', 'name email profileImage');
-
-        if (!updatedRoom) {
-          console.log(`Room ${roomId} not found during update`);
-          return;
-        }
+        await roomRedis.removeParticipant(roomId, userId);
+        const participants = await roomRedis.getParticipants(roomId);
 
         // 스트리밍 세션 정리
         for (const [messageId, session] of streamingSessions.entries()) {
@@ -645,7 +642,7 @@ module.exports = function(io) {
 
         // 이벤트 발송
         io.to(roomId).emit('message', leaveMessage);
-        io.to(roomId).emit('participantsUpdate', updatedRoom.participants);
+        io.to(roomId).emit('participantsUpdate', participants);
 
         console.log(`User ${socket.user.id} left room ${roomId} successfully`);
 
@@ -662,6 +659,7 @@ module.exports = function(io) {
       if (!socket.user) return;
 
       try {
+        const userId = socket.user.id;
         // 연결 정보 삭제
         const connectedSocketId = await redisClient.get(getConnectedUserKey(socket.user.id));
         if (connectedSocketId === socket.id) {
@@ -700,18 +698,12 @@ module.exports = function(io) {
               timestamp: new Date()
             });
 
-            const updatedRoom = await Room.findByIdAndUpdate(
-              roomId,
-              { $pull: { participants: socket.user.id } },
-              { 
-                new: true,
-                runValidators: true 
-              }
-            ).populate('participants', 'name email profileImage');
+            await roomRedis.removeParticipant(roomId, userId);
+            const participants = await roomRedis.getParticipants(roomId);
 
-            if (updatedRoom) {
+            if (participants) {
               io.to(roomId).emit('message', leaveMessage);
-              io.to(roomId).emit('participantsUpdate', updatedRoom.participants);
+              io.to(roomId).emit('participantsUpdate', participants);
             }
           }
         }
