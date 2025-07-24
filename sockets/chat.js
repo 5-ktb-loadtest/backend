@@ -434,6 +434,7 @@ module.exports = function (io) {
 
     // 메시지 전송 처리
     socket.on('chatMessage', async (messageData) => {
+      let messageId
       try {
         if (!socket.user) {
           throw new Error('Unauthorized');
@@ -462,7 +463,6 @@ module.exports = function (io) {
 
         // AI 멘션 확인
         const aiMentions = extractAIMentions(content);
-        let message;
 
         // 메시지 타입별 처리
         switch (type) {
@@ -506,7 +506,7 @@ module.exports = function (io) {
 
                   console.log('S3 file metadata saved:', {
                     fileId: newFileId,
-                    url: newFile.url,
+                    url: file.url,
                     originalname: file.originalname
                   });
                 }
@@ -527,7 +527,7 @@ module.exports = function (io) {
             }
 
             // 파일 메시지 생성
-            const messageId = await redisDataLayer.createMessage(room, {
+            messageId = await redisDataLayer.createMessage(room, {
               type: 'file',
               sender: socket.user.id,
               fileId: file._id,
