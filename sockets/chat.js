@@ -526,23 +526,13 @@ module.exports = function (io) {
             }
 
             // 파일 메시지 생성
-            message = new Message({
-              room,
-              sender: socket.user.id,
+            const messageId = await redisDataLayer.createMessage(room, {
               type: 'file',
-              file: file._id,
-              content: content || '',
-              timestamp: new Date(),
-              reactions: {},
-              metadata: {
-                fileType: file.mimetype,
-                fileSize: file.size,
-                originalName: file.originalname,
-                isS3File: file.isS3File || false,
-                s3Key: file.key,
-                s3Bucket: file.bucket
-              }
+              sender: socket.user.id,
+              fileId: file._id,
+              content: content || ''
             });
+            const message = await redisDataLayer.getMessage(messageId);
 
             console.log('File message created:', {
               messageId: message._id,
