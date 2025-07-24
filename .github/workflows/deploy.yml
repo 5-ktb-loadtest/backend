@@ -46,7 +46,6 @@ sudo mkdir -p /opt/app/backend
 sudo chown -R \$USER:\$USER /opt/app
 cd /opt/app
 
-# .env 생성
 cat <<EOT > ./backend/.env
 MONGO_URI=${{ secrets.MONGO_URI }}
 JWT_SECRET=${{ secrets.JWT_SECRET }}
@@ -57,7 +56,6 @@ ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
 PASSWORD_SALT=${{ secrets.PASSWORD_SALT }}
 EOT
 
-# docker-compose.yml 생성
 cat <<EOT > docker-compose.yml
 version: '3.8'
 services:
@@ -108,7 +106,6 @@ services:
       - "5002:5000"
 EOT
 
-# docker 설치 및 compose 실행
 sudo apt-get update && sudo apt-get install -y \
   ca-certificates curl gnupg lsb-release
 
@@ -133,7 +130,8 @@ EOF
     - name: Encode user-data
       id: encode_userdata
       run: |
-        echo "USERDATA=$(base64 -w0 userdata.sh)" >> $GITHUB_OUTPUT
+        USERDATA=$(base64 -w0 userdata.sh)
+        echo "userdata=$USERDATA" >> "$GITHUB_OUTPUT"
 
     - name: Create new Launch Template version
       run: |
@@ -141,13 +139,13 @@ EOF
           --launch-template-id $LAUNCH_TEMPLATE_ID \
           --source-version 1 \
           --version-description "Updated at $(date +%Y%m%d-%H%M)" \
-          --launch-template-data "{ \"userData\": \"${{ steps.encode_userdata.outputs.USERDATA }}\" }"
+          --launch-template-data "{ \"userData\": \"${{ steps.encode_userdata.outputs.userdata }}\" }"
 
     - name: Update ASG to use latest Launch Template version
       run: |
         aws autoscaling update-auto-scaling-group \
           --auto-scaling-group-name $ASG_NAME \
-          --launch-template \"LaunchTemplateId=$LAUNCH_TEMPLATE_ID,Version=Latest\"
+          --launch-template "LaunchTemplateId=$LAUNCH_TEMPLATE_ID,Version=Latest"
 
     - name: Start Rolling Update
       run: |
