@@ -487,7 +487,7 @@ module.exports = function (io) {
 
                 if (!file) {
                   // S3 파일 메타데이터 생성
-                  const newFile = await FileModel.createFile({
+                  const newFileId = await FileModel.createFile({
                     _id: fileData._id,
                     filename: fileData.filename,
                     originalname: fileData.originalname,
@@ -502,11 +502,12 @@ module.exports = function (io) {
                     s3Bucket: fileData.bucket || process.env.S3_BUCKET_NAME,
                     uploadDate: fileData.uploadedAt ? new Date(fileData.uploadedAt) : new Date()
                   });
+                  file = await FileModel.findById(newFileId);
 
                   console.log('S3 file metadata saved:', {
-                    fileId: newFile._id,
+                    fileId: newFileId,
                     url: newFile.url,
-                    originalname: newFile.originalname
+                    originalname: file.originalname
                   });
                 }
               } catch (fileError) {
