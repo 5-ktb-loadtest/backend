@@ -473,12 +473,13 @@ module.exports = function (io) {
 
             // S3 파일 처리
             if (fileData.isS3File || fileData.s3Uploaded || fileData.alreadyUploaded) {
-              console.log('Processing S3 file:', {
-                fileId: fileData._id,
-                filename: fileData.filename,
-                url: fileData.url,
-                isS3File: true
-              });
+              console.log('[S3 FILE] fileData from client:', fileData);
+              // console.log('Processing S3 file:', {
+              //   fileId: fileData._id,
+              //   filename: fileData.filename,
+              //   url: fileData.url,
+              //   isS3File: true
+              // });
               let file;
               // S3 파일 메타데이터 직접 생성/조회
               try {
@@ -512,7 +513,14 @@ module.exports = function (io) {
                 }
               } catch (fileError) {
                 console.error('S3 file processing error:', fileError, fileData);
-                throw new Error('S3 파일 처리 중 오류가 발생했습니다.');
+                // throw new Error('S3 파일 처리 중 오류가 발생했습니다.', fileData);
+                socket.emit('error', {
+                  code: 'MESSAGE_ERROR',
+                  message: 'S3 파일 처리 중 오류가 발생했습니다.',
+                  fileData, // ← fileData를 프론트로 전달
+                  errorDetail: fileError?.message || String(fileError)
+                });
+                return; 
               }
 
             } else {
