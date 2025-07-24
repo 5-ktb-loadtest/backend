@@ -13,7 +13,7 @@ const getConnectedUserKey = (userId) => `connected_user:${userId}`;
 const getUserRoomKey = (userId) => `user_room:${userId}`;
 const getRoomUsersKey = (roomId) => `room_users:${roomId}`;
 
-module.exports = function(io) {
+module.exports = function (io) {
   const streamingSessions = new Map();
   const messageQueues = new Map();
   const messageLoadRetries = new Map();
@@ -64,7 +64,7 @@ module.exports = function(io) {
       // 결과 처리
       const hasMore = messages.length > limit;
       const resultMessages = messages.slice(0, limit);
-      const sortedMessages = resultMessages.sort((a, b) => 
+      const sortedMessages = resultMessages.sort((a, b) =>
         new Date(a.timestamp) - new Date(b.timestamp)
       );
 
@@ -117,7 +117,7 @@ module.exports = function(io) {
   // 재시도 로직을 포함한 메시지 로드 함수
   const loadMessagesWithRetry = async (socket, roomId, before, retryCount = 0) => {
     const retryKey = `${roomId}:${socket.user.id}`;
-    
+
     try {
       if (messageLoadRetries.get(retryKey) >= MAX_RETRIES) {
         throw new Error('최대 재시도 횟수를 초과했습니다.');
@@ -129,11 +129,11 @@ module.exports = function(io) {
 
     } catch (error) {
       const currentRetries = messageLoadRetries.get(retryKey) || 0;
-      
+
       if (currentRetries < MAX_RETRIES) {
         messageLoadRetries.set(retryKey, currentRetries + 1);
         const delay = Math.min(RETRY_DELAY * Math.pow(2, currentRetries), 10000);
-        
+
         logDebug('retrying message load', {
           roomId,
           retryCount: currentRetries + 1,
@@ -233,19 +233,19 @@ module.exports = function(io) {
       next();
     } catch (error) {
       console.error('Socket authentication error:', error);
-      
+
       if (error.name === 'TokenExpiredError') {
         return next(new Error('Token expired'));
       }
-      
+
       if (error.name === 'JsonWebTokenError') {
         return next(new Error('Invalid token'));
       }
-      
+
       next(new Error('Authentication failed'));
     }
   });
-  
+
   io.on('connection', (socket) => {
     logDebug('socket connected', {
       socketId: socket.id,
@@ -282,7 +282,7 @@ module.exports = function(io) {
         }, DUPLICATE_LOGIN_TIMEOUT);
       }
     }
-      
+
     // 이전 메시지 로딩 처리 개선
     socket.on('fetchPreviousMessages', async ({ roomId, before }) => {
       const queueKey = `${roomId}:${socket.user.id}`;
@@ -314,7 +314,7 @@ module.exports = function(io) {
         socket.emit('messageLoadStart');
 
         const result = await loadMessagesWithRetry(socket, roomId, before);
-        
+
         logDebug('previous messages loaded', {
           roomId,
           messageCount: result.messages.length,
@@ -336,7 +336,7 @@ module.exports = function(io) {
         }, LOAD_DELAY);
       }
     });
-    
+
     // 채팅방 입장 처리 개선
     socket.on('joinRoom', async (roomId) => {
       try {
@@ -357,14 +357,14 @@ module.exports = function(io) {
 
         // 기존 방에서 나가기
         if (currentRoom) {
-          logDebug('leaving current room', { 
-            userId: socket.user.id, 
-            roomId: currentRoom 
+          logDebug('leaving current room', {
+            userId: socket.user.id,
+            roomId: currentRoom
           });
           socket.leave(currentRoom);
           await redisClient.del(getUserRoomKey(socket.user.id));
           await redisClient.client.sRem(getRoomUsersKey(currentRoom), socket.user.id);
-          
+
           socket.to(currentRoom).emit('userLeft', {
             userId: socket.user.id,
             name: socket.user.name
@@ -379,9 +379,9 @@ module.exports = function(io) {
         const room = await Room.findByIdAndUpdate(
           roomId,
           { $addToSet: { participants: socket.user.id } },
-          { 
+          {
             new: true,
-            runValidators: true 
+            runValidators: true
           }
         ).populate('participants', 'name email profileImage');
 
@@ -398,7 +398,7 @@ module.exports = function(io) {
           type: 'system',
           timestamp: new Date()
         });
-        
+
         await joinMessage.save();
 
         // 초기 메시지 로드
@@ -444,7 +444,9 @@ module.exports = function(io) {
         });
       }
     });
-    
+    // 백엔드 소켓 핸들러의 chatMessage 부분만 수정
+    // 기존 코드에서 이 부분만 교체하세요
+
     // 메시지 전송 처리
     socket.on('chatMessage', async (messageData) => {
       try {
@@ -477,10 +479,11 @@ module.exports = function(io) {
         //   socket.user.id, 
         //   socket.user.sessionId
         // );
-        
+
         // if (!sessionValidation.isValid) {
         //   throw new Error('세션이 만료되었습니다. 다시 로그인해주세요.');
         // }
+
 
         // AI 멘션 확인
         const aiMentions = extractAIMentions(content);
@@ -491,7 +494,8 @@ module.exports = function(io) {
           room,
           userId: socket.user.id,
           hasFileData: !!fileData,
-          hasAIMentions: aiMentions.length
+          hasAIMentions: aiMentions.length,
+          isS3File: fileData?.isS3File || fileData?.s3Uploaded
         });
 
         // 메시지 타입별 처리
@@ -501,15 +505,70 @@ module.exports = function(io) {
               throw new Error('파일 데이터가 올바르지 않습니다.');
             }
 
-            const file = await File.findOne({
-              _id: fileData._id,
-              user: socket.user.id
-            });
+            let file;
 
-            if (!file) {
-              throw new Error('파일을 찾을 수 없거나 접근 권한이 없습니다.');
+            // S3 파일 처리
+            if (fileData.isS3File || fileData.s3Uploaded || fileData.alreadyUploaded) {
+              console.log('Processing S3 file:', {
+                fileId: fileData._id,
+                filename: fileData.filename,
+                url: fileData.url,
+                isS3File: true
+              });
+
+              // S3 파일 메타데이터 직접 생성/조회
+              try {
+                // 기존 파일 레코드가 있는지 확인
+                file = await File.findById(fileData._id);
+
+                if (!file) {
+                  // S3 파일 메타데이터 생성
+                  file = new File({
+                    _id: fileData._id,
+                    filename: fileData.filename,
+                    originalname: fileData.originalname,
+                    mimetype: fileData.mimetype,
+                    size: fileData.size,
+                    path: fileData.url, // S3 URL
+                    url: fileData.url,   // S3 URL
+                    destination: 'S3',
+                    fieldname: 'file',
+                    encoding: '7bit',
+                    user: socket.user.id, // 업로드한 사용자
+                    // S3 특화 필드들
+                    key: fileData.key || fileData.s3Key,
+                    bucket: fileData.bucket || process.env.S3_BUCKET_NAME,
+                    uploadedAt: fileData.uploadedAt ? new Date(fileData.uploadedAt) : new Date(),
+                    isS3File: true
+                  });
+
+                  await file.save();
+                  console.log('S3 file metadata saved:', {
+                    fileId: file._id,
+                    url: file.url,
+                    originalname: file.originalname
+                  });
+                }
+              } catch (fileError) {
+                console.error('S3 file processing error:', fileError);
+                throw new Error('S3 파일 처리 중 오류가 발생했습니다.');
+              }
+
+            } else {
+              // 로컬 파일 처리 (기존 로직)
+              console.log('Processing local file:', fileData._id);
+
+              file = await File.findOne({
+                _id: fileData._id,
+                user: socket.user.id
+              });
+
+              if (!file) {
+                throw new Error('파일을 찾을 수 없거나 접근 권한이 없습니다.');
+              }
             }
 
+            // 파일 메시지 생성
             message = new Message({
               room,
               sender: socket.user.id,
@@ -521,9 +580,20 @@ module.exports = function(io) {
               metadata: {
                 fileType: file.mimetype,
                 fileSize: file.size,
-                originalName: file.originalname
+                originalName: file.originalname,
+                isS3File: file.isS3File || false,
+                s3Key: file.key,
+                s3Bucket: file.bucket
               }
             });
+
+            console.log('File message created:', {
+              messageId: message._id,
+              fileId: file._id,
+              filename: file.filename,
+              isS3File: file.isS3File
+            });
+
             break;
 
           case 'text':
@@ -546,19 +616,22 @@ module.exports = function(io) {
             throw new Error('지원하지 않는 메시지 타입입니다.');
         }
 
-        io.to(room).emit('message', message); // 먼저 브로드캐스트
+        // 메시지 저장
+        await message.save();
 
-        // 저장은 비동기로 처리
-        message.save().catch(error => {
-          console.error('Message save error:', error);
-        });
+        // 메시지 populate
+        const populatedMessage = await Message.findById(message._id)
+          .populate('sender', 'name email profileImage')
+          .populate('file', 'filename originalname mimetype size url path isS3File');
 
-        // populate도 비동기로 처리
-        message.populate([
-          { path: 'sender', select: 'name email profileImage' },
-          { path: 'file', select: 'filename originalname mimetype size' }
-        ]).catch(error => {
-          console.error('Message populate error:', error);
+        // 브로드캐스트
+        io.to(room).emit('message', populatedMessage);
+
+        console.log('Message broadcast successful:', {
+          messageId: populatedMessage._id,
+          type: populatedMessage.type,
+          room: room,
+          hasFile: !!populatedMessage.file
         });
 
         // AI 멘션이 있는 경우 AI 응답 생성
@@ -571,17 +644,34 @@ module.exports = function(io) {
 
         await SessionService.updateLastActivity(socket.user.id);
 
-        logDebug('message processed', {
+        logDebug('message processed successfully', {
           messageId: message._id,
           type: message.type,
-          room
+          room,
+          isS3File: message.metadata?.isS3File
         });
 
       } catch (error) {
         console.error('Message handling error:', error);
+
+        // 구체적인 에러 코드와 메시지 제공
+        let errorCode = 'MESSAGE_ERROR';
+        let errorMessage = error.message || '메시지 전송 중 오류가 발생했습니다.';
+
+        if (error.message?.includes('S3')) {
+          errorCode = 'S3_FILE_ERROR';
+          errorMessage = 'S3 파일 처리 중 오류가 발생했습니다. 다시 시도해주세요.';
+        } else if (error.message?.includes('파일을 찾을 수 없거나')) {
+          errorCode = 'FILE_NOT_FOUND';
+          errorMessage = '파일을 찾을 수 없습니다. 파일을 다시 업로드해주세요.';
+        } else if (error.message?.includes('권한')) {
+          errorCode = 'ACCESS_DENIED';
+          errorMessage = '파일 접근 권한이 없습니다.';
+        }
+
         socket.emit('error', {
-          code: error.code || 'MESSAGE_ERROR',
-          message: error.message || '메시지 전송 중 오류가 발생했습니다.'
+          code: errorCode,
+          message: errorMessage
         });
       }
     });
@@ -631,13 +721,13 @@ module.exports = function(io) {
         leaveMessage.save().catch(error => {
           console.error('Leave message save error:', error);
         });
-        
+
 
         // 참가자 목록 업데이트 - profileImage 포함
         const updatedRoom = await Room.findByIdAndUpdate(
           roomId,
           { $pull: { participants: socket.user.id } },
-          { 
+          {
             new: true,
             runValidators: true
           }
@@ -673,7 +763,7 @@ module.exports = function(io) {
         });
       }
     });
-    
+
     // 연결 해제 처리
     socket.on('disconnect', async (reason) => {
       if (!socket.user) return;
@@ -690,7 +780,7 @@ module.exports = function(io) {
           await redisClient.del(getUserRoomKey(socket.user.id));
           await redisClient.client.sRem(getRoomUsersKey(roomId), socket.user.id);
         }
-        
+
         // 메시지 큐 정리
         const userQueues = Array.from(messageQueues.keys())
           .filter(key => key.endsWith(`:${socket.user.id}`));
@@ -698,7 +788,7 @@ module.exports = function(io) {
           messageQueues.delete(key);
           messageLoadRetries.delete(key);
         });
-        
+
         // 스트리밍 세션 정리
         for (const [messageId, session] of streamingSessions.entries()) {
           if (session.userId === socket.user.id) {
@@ -729,9 +819,9 @@ module.exports = function(io) {
             const updatedRoom = await Room.findByIdAndUpdate(
               roomId,
               { $pull: { participants: socket.user.id } },
-              { 
+              {
                 new: true,
-                runValidators: true 
+                runValidators: true
               }
             ).populate('participants', 'name email profileImage');
 
@@ -860,18 +950,18 @@ module.exports = function(io) {
   // AI 멘션 추출 함수
   function extractAIMentions(content) {
     if (!content) return [];
-    
+
     const aiTypes = ['wayneAI', 'consultingAI'];
     const mentions = new Set();
     const mentionRegex = /@(wayneAI|consultingAI)\b/g;
     let match;
-    
+
     while ((match = mentionRegex.exec(content)) !== null) {
       if (aiTypes.includes(match[1])) {
         mentions.add(match[1]);
       }
     }
-    
+
     return Array.from(mentions);
   }
 
@@ -891,7 +981,7 @@ module.exports = function(io) {
       lastUpdate: Date.now(),
       reactions: {}
     });
-    
+
     logDebug('AI response started', {
       messageId,
       aiType: aiName,
@@ -917,7 +1007,7 @@ module.exports = function(io) {
         },
         onChunk: async (chunk) => {
           accumulatedContent += chunk.currentChunk || '';
-          
+
           const session = streamingSessions.get(messageId);
           if (session) {
             session.content = accumulatedContent;
@@ -976,7 +1066,7 @@ module.exports = function(io) {
         onError: (error) => {
           streamingSessions.delete(messageId);
           console.error('AI response error:', error);
-          
+
           io.to(room).emit('aiMessageError', {
             messageId,
             error: error.message || 'AI 응답 생성 중 오류가 발생했습니다.',
@@ -993,7 +1083,7 @@ module.exports = function(io) {
     } catch (error) {
       streamingSessions.delete(messageId);
       console.error('AI service error:', error);
-      
+
       io.to(room).emit('aiMessageError', {
         messageId,
         error: error.message || 'AI 서비스 오류가 발생했습니다.',
