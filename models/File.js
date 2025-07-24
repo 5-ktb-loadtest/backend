@@ -34,7 +34,7 @@ class FileModel {
       s3Bucket: fileData.s3Bucket ?? '',
       url: fileData.url ?? fileData.path ?? ''
     });
-    return FileModel.findById(fileId);
+    return fileId;
   }
 
   static async findById(fileId) {
