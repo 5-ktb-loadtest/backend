@@ -50,6 +50,10 @@ const UserSchema = new mongoose.Schema({
 function encryptEmail(email) {
   if (!email) return null;
   try {
+    // encryptionKey 길이 체크 (32바이트 = 64 hex 문자)
+    if (!encryptionKey || encryptionKey.length !== 64) {
+      throw new Error('Encryption key must be 64 hex characters (32 bytes)');
+    }
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(encryptionKey, 'hex'), iv);
     let encrypted = cipher.update(email, 'utf8', 'hex');
@@ -57,7 +61,7 @@ function encryptEmail(email) {
     return iv.toString('hex') + ':' + encrypted;
   } catch (error) {
     console.error('Email encryption error:', error);
-    return null;
+    throw error; // null 반환 대신 예외 발생
   }
 }
 
@@ -72,12 +76,12 @@ UserSchema.pre('save', async function(next) {
 
     // 이메일 변경 시에만 암호화
     if (this.isModified('email')) {
-      this.encryptedEmail = encryptEmail(this.email);
+      this.encryptedEmail = encryptEmail(this.email); // 실패 시 예외 발생
     }
 
     next();
   } catch (error) {
-    next(error);
+    next(error); // 암호화 실패 시 저장 중단
   }
 });
 

@@ -9,6 +9,7 @@ COPY package*.json ./
 
 # 4. 의존성 설치
 RUN npm ci
+RUN npm install --save @opentelemetry/api @opentelemetry/auto-instrumentations-node
 
 # 5. 소스 전체 복사
 COPY . .

@@ -129,7 +129,7 @@ router.get('/', [limiter, auth], async (req, res) => {
             email: p.email || ''
           })),
         participantsCount: participants.length,
-        createdAt: room.createdAt || new Date(),
+        createdAt: new Date(Number(room.createdAt)) || new Date(),
         isCreator: (creator._id || '') === req.user.id
       };
     }).filter(room => room !== null);    
@@ -200,7 +200,7 @@ router.post('/', auth, async (req, res) => {
         creator,
         participants: [creator],
         hasPassword: !!password,
-        createdAt: room.createdAt
+        createdAt: new Date(Number(room.createdAt))
       });
     }
     
@@ -212,7 +212,7 @@ router.post('/', auth, async (req, res) => {
         creator,
         participants: [creator],
         hasPassword: !!password,
-        createdAt: room.createdAt
+        createdAt: new Date(Number(room.createdAt))
       }
     });
     // 수정 끝
@@ -251,7 +251,7 @@ router.get('/:roomId', auth, async (req, res) => {
         creator,
         participants,
         hasPassword: room.hasPassword === 'true',
-        createdAt: room.createdAt
+        createdAt: new Date(Number(room.createdAt))
       }
     });
   } catch (error) {
@@ -277,9 +277,14 @@ router.post('/:roomId/join', auth, async (req, res) => {
     }
 
     // 비밀번호 확인
-    const isPasswordValid = await roomRedis.checkPassword(req.params.roomId, password);
-    if (!isPasswordValid) {
-      return res.status(401).json({ success: false, message: '비밀번호가 일치하지 않습니다.' });
+    if (room.hasPassword === 'true') {
+      const isPasswordValid = await roomRedis.checkPassword(req.params.roomId, password);
+      if (!isPasswordValid) {
+        return res.status(403).json({
+          success: false,
+          message: '비밀번호가 일치하지 않습니다.'
+        });
+      }
     }
 
     // 참여자 목록에 추가
@@ -297,7 +302,7 @@ router.post('/:roomId/join', auth, async (req, res) => {
         creator,
         participants,
         hasPassword: room.hasPassword === 'true',
-        createdAt: room.createdAt
+        createdAt: new Date(Number(room.createdAt))
       });
     }
 
@@ -309,7 +314,7 @@ router.post('/:roomId/join', auth, async (req, res) => {
         creator,
         participants,
         hasPassword: room.hasPassword === 'true',
-        createdAt: room.createdAt
+        createdAt: new Date(Number(room.createdAt))
       }
     });
   } catch (error) {
