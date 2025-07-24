@@ -616,12 +616,22 @@ module.exports = function(io) {
         await redisClient.client.sRem(getRoomUsersKey(roomId), socket.user.id);
 
         // 퇴장 메시지 생성 및 저장
-        const leaveMessage = await Message.create({
+        // 최적화 후 (부하테스트용)
+        const leaveMessage = new Message({
           room: roomId,
           content: `${socket.user.name}님이 퇴장하였습니다.`,
           type: 'system',
           timestamp: new Date()
         });
+
+        // 브로드캐스트 먼저
+        io.to(roomId).emit('message', leaveMessage);
+
+        // 저장은 비동기로 처리
+        leaveMessage.save().catch(error => {
+          console.error('Leave message save error:', error);
+        });
+        
 
         // 참가자 목록 업데이트 - profileImage 포함
         const updatedRoom = await Room.findByIdAndUpdate(
@@ -700,11 +710,20 @@ module.exports = function(io) {
         if (roomId) {
           // 다른 디바이스로 인한 연결 종료가 아닌 경우에만 처리
           if (reason !== 'client namespace disconnect' && reason !== 'duplicate_login') {
-            const leaveMessage = await Message.create({
+            // 최적화 후 (부하테스트용)
+            const leaveMessage = new Message({
               room: roomId,
               content: `${socket.user.name}님이 연결이 끊어졌습니다.`,
               type: 'system',
               timestamp: new Date()
+            });
+
+            // 브로드캐스트 먼저
+            io.to(roomId).emit('message', leaveMessage);
+
+            // 저장은 비동기로 처리
+            leaveMessage.save().catch(error => {
+              console.error('Disconnect message save error:', error);
             });
 
             const updatedRoom = await Room.findByIdAndUpdate(
