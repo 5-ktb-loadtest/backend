@@ -554,11 +554,11 @@ module.exports = function (io) {
             break;
 
           case 'text':
-            if (!finalContent || finalContent.length === 0) return;
+            if (!content || content.length === 0) return;
             messageId = await redisDataLayer.createMessage(room, {
               type: 'text',
               sender: socket.user.id,
-              content: finalContent
+              content: content
             });
             break;
 
