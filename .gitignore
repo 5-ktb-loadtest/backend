@@ -1,3 +1,5 @@
 .env
 node_modules/
-uploads/
+uploads/.DS_Store
+routes/.DS_Store
+.DS_Store
