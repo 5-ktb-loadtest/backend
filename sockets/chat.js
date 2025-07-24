@@ -968,20 +968,9 @@ module.exports = function (io) {
   // AI 응답 처리 함수 개선
   async function handleAIResponse(io, room, aiName, query) {
     const messageId = `${aiName}-${Date.now()}`;
-    let accumulatedContent = '';
     const timestamp = new Date();
 
-    // 스트리밍 세션 초기화
-    streamingSessions.set(messageId, {
-      room,
-      aiType: aiName,
-      content: '',
-      messageId,
-      timestamp,
-      lastUpdate: Date.now(),
-      reactions: {}
-    });
-
+    
     logDebug('AI response started', {
       messageId,
       aiType: aiName,
@@ -1005,25 +994,7 @@ module.exports = function (io) {
             aiType: aiName
           });
         },
-        onChunk: async (chunk) => {
-          accumulatedContent += chunk.currentChunk || '';
-
-          const session = streamingSessions.get(messageId);
-          if (session) {
-            session.content = accumulatedContent;
-            session.lastUpdate = Date.now();
-          }
-
-          io.to(room).emit('aiMessageChunk', {
-            messageId,
-            currentChunk: chunk.currentChunk,
-            fullContent: accumulatedContent,
-            isCodeBlock: chunk.isCodeBlock,
-            timestamp: new Date(),
-            aiType: aiName,
-            isComplete: false
-          });
-        },
+      
         onComplete: async (finalContent) => {
           // 스트리밍 세션 정리
           streamingSessions.delete(messageId);
