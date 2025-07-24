@@ -29,7 +29,8 @@ const corsOptions = {
     'http://0.0.0.0:3000',
     'https://0.0.0.0:3000',
     'http://34.64.60.60:3000',
-    'https://chat.goorm-ktb-005.goorm.team'
+    'https://chat.goorm-ktb-005.goorm.team',
+    'http://chat.goorm-ktb-005.goorm.team'
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -120,5 +121,10 @@ app.use((err, req, res, next) => {
 //     console.error('Server startup error:', err);
 //     process.exit(1);
 //   });
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log('Environment:', process.env.NODE_ENV);
+  console.log('API Base URL:', `http://0.0.0.0:${PORT}/api`);
+});
 
 module.exports = { app, server };
