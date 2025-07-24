@@ -21,7 +21,7 @@ class FileModel {
   static async createFile(fileData) {
     // fileData에 위의 모든 필드 포함
     const fileId = await redisDataLayer.createFile({
-      _id,
+      id: fileData._id,
       filename: fileData.filename ?? 'unknown',
       originalname: fileData.originalname ?? fileData.filename ?? 'unknown',
       mimetype: fileData.mimetype ?? 'application/octet-stream',
