@@ -15,140 +15,140 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Docker Login
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Build and Push Docker Image
-      run: |
-        docker build -t ${{ secrets.DOCKER_USERNAME }}/node_backend:${IMAGE_TAG} .
-        docker push ${{ secrets.DOCKER_USERNAME }}/node_backend:${IMAGE_TAG}
+      - name: Build and Push Docker Image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/node_backend:${IMAGE_TAG} .
+          docker push ${{ secrets.DOCKER_USERNAME }}/node_backend:${IMAGE_TAG}
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        region: ap-northeast-2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          region: ap-northeast-2
 
-    - name: Generate user-data.sh with secrets
-  run: |
-    cat <<EOF > userdata.sh
-    #!/bin/bash
-    set -e
+      - name: Generate user-data.sh with secrets
+        run: |
+          cat <<EOF > userdata.sh
+          #!/bin/bash
+          set -e
 
-    sudo mkdir -p /opt/app/backend
-    sudo chown -R \$USER:\$USER /opt/app
-    cd /opt/app
+          sudo mkdir -p /opt/app/backend
+          sudo chown -R \$USER:\$USER /opt/app
+          cd /opt/app
 
-    cat <<'EOT' > ./backend/.env
-    MONGO_URI=${{ secrets.MONGO_URI }}
-    JWT_SECRET=${{ secrets.JWT_SECRET }}
-    REDIS_HOST=${{ secrets.REDIS_HOST }}
-    REDIS_PORT=${{ secrets.REDIS_PORT }}
-    OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-    ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
-    PASSWORD_SALT=${{ secrets.PASSWORD_SALT }}
-    EOT
+          cat <<'EOT' > ./backend/.env
+          MONGO_URI=${{ secrets.MONGO_URI }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          REDIS_HOST=${{ secrets.REDIS_HOST }}
+          REDIS_PORT=${{ secrets.REDIS_PORT }}
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
+          PASSWORD_SALT=${{ secrets.PASSWORD_SALT }}
+          EOT
 
-    cat <<'EOT' > docker-compose.yml
-    version: '3.8'
-    services:
-      backend1:
-        image: ${{ secrets.DOCKER_USERNAME }}/node_backend:latest
-        container_name: backend1
-        restart: always
-        env_file:
-          - ./backend/.env
-        environment:
-          - OTEL_TRACES_EXPORTER=otlp
-          - OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.us.signoz.cloud:443
-          - OTEL_NODE_RESOURCE_DETECTORS=env,host,os
-          - OTEL_SERVICE_NAME=v1-backend1
-          - OTEL_EXPORTER_OTLP_HEADERS=signoz-ingestion-key=${{ secrets.SIGNOZ_KEY }}
-          - NODE_OPTIONS=--require @opentelemetry/auto-instrumentations-node/register
-        ports:
-          - "5000:5000"
-      backend2:
-        image: ${{ secrets.DOCKER_USERNAME }}/node_backend:latest
-        container_name: backend2
-        restart: always
-        env_file:
-          - ./backend/.env
-        environment:
-          - OTEL_TRACES_EXPORTER=otlp
-          - OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.us.signoz.cloud:443
-          - OTEL_NODE_RESOURCE_DETECTORS=env,host,os
-          - OTEL_SERVICE_NAME=v1-backend2
-          - OTEL_EXPORTER_OTLP_HEADERS=signoz-ingestion-key=${{ secrets.SIGNOZ_KEY }}
-          - NODE_OPTIONS=--require @opentelemetry/auto-instrumentations-node/register
-        ports:
-          - "5001:5000"
-      backend3:
-        image: ${{ secrets.DOCKER_USERNAME }}/node_backend:latest
-        container_name: backend3
-        restart: always
-        env_file:
-          - ./backend/.env
-        environment:
-          - OTEL_TRACES_EXPORTER=otlp
-          - OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.us.signoz.cloud:443
-          - OTEL_NODE_RESOURCE_DETECTORS=env,host,os
-          - OTEL_SERVICE_NAME=v1-backend3
-          - OTEL_EXPORTER_OTLP_HEADERS=signoz-ingestion-key=${{ secrets.SIGNOZ_KEY }}
-          - NODE_OPTIONS=--require @opentelemetry/auto-instrumentations-node/register
-        ports:
-          - "5002:5000"
-    EOT
+          cat <<'EOT' > docker-compose.yml
+          version: '3.8'
+          services:
+            backend1:
+              image: ${{ secrets.DOCKER_USERNAME }}/node_backend:latest
+              container_name: backend1
+              restart: always
+              env_file:
+                - ./backend/.env
+              environment:
+                - OTEL_TRACES_EXPORTER=otlp
+                - OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.us.signoz.cloud:443
+                - OTEL_NODE_RESOURCE_DETECTORS=env,host,os
+                - OTEL_SERVICE_NAME=v1-backend1
+                - OTEL_EXPORTER_OTLP_HEADERS=signoz-ingestion-key=${{ secrets.SIGNOZ_KEY }}
+                - NODE_OPTIONS=--require @opentelemetry/auto-instrumentations-node/register
+              ports:
+                - "5000:5000"
+            backend2:
+              image: ${{ secrets.DOCKER_USERNAME }}/node_backend:latest
+              container_name: backend2
+              restart: always
+              env_file:
+                - ./backend/.env
+              environment:
+                - OTEL_TRACES_EXPORTER=otlp
+                - OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.us.signoz.cloud:443
+                - OTEL_NODE_RESOURCE_DETECTORS=env,host,os
+                - OTEL_SERVICE_NAME=v1-backend2
+                - OTEL_EXPORTER_OTLP_HEADERS=signoz-ingestion-key=${{ secrets.SIGNOZ_KEY }}
+                - NODE_OPTIONS=--require @opentelemetry/auto-instrumentations-node/register
+              ports:
+                - "5001:5000"
+            backend3:
+              image: ${{ secrets.DOCKER_USERNAME }}/node_backend:latest
+              container_name: backend3
+              restart: always
+              env_file:
+                - ./backend/.env
+              environment:
+                - OTEL_TRACES_EXPORTER=otlp
+                - OTEL_EXPORTER_OTLP_ENDPOINT=https://ingest.us.signoz.cloud:443
+                - OTEL_NODE_RESOURCE_DETECTORS=env,host,os
+                - OTEL_SERVICE_NAME=v1-backend3
+                - OTEL_EXPORTER_OTLP_HEADERS=signoz-ingestion-key=${{ secrets.SIGNOZ_KEY }}
+                - NODE_OPTIONS=--require @opentelemetry/auto-instrumentations-node/register
+              ports:
+                - "5002:5000"
+          EOT
 
-    sudo apt-get update && sudo apt-get install -y \
-      ca-certificates curl gnupg lsb-release
+          sudo apt-get update && sudo apt-get install -y \
+            ca-certificates curl gnupg lsb-release
 
-    sudo mkdir -p /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+          sudo mkdir -p /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 
-    echo \
-      "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      \$(lsb_release -cs) stable" | \
-      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+          echo \
+            "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+            \$(lsb_release -cs) stable" | \
+            sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-    sudo apt-get update && sudo apt-get install -y \
-      docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+          sudo apt-get update && sudo apt-get install -y \
+            docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-\$(uname -s)-\$(uname -m)" \
-      -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
+          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-\$(uname -s)-\$(uname -m)" \
+            -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
 
-    sudo docker compose up -d
-    EOF
+          sudo docker compose up -d
+          EOF
 
-    - name: Encode user-data
-      id: encode_userdata
-      run: |
-        USERDATA=$(base64 -w 0 userdata.sh | tr -d '\n')
-        echo "userdata=$USERDATA" >> $GITHUB_OUTPUT
+      - name: Encode user-data
+        id: encode_userdata
+        run: |
+          USERDATA=$(base64 -w 0 userdata.sh | tr -d '\n')
+          echo "userdata=$USERDATA" >> $GITHUB_OUTPUT
 
-    - name: Create new Launch Template version
-      run: |
-        aws ec2 create-launch-template-version \
-          --launch-template-id $LAUNCH_TEMPLATE_ID \
-          --source-version 1 \
-          --version-description "Updated at $(date +%Y%m%d-%H%M)" \
-          --launch-template-data "{ \"userData\": \"${{ steps.encode_userdata.outputs.userdata }}\" }"
+      - name: Create new Launch Template version
+        run: |
+          aws ec2 create-launch-template-version \
+            --launch-template-id $LAUNCH_TEMPLATE_ID \
+            --source-version 1 \
+            --version-description "Updated at $(date +%Y%m%d-%H%M)" \
+            --launch-template-data "{ \"userData\": \"${{ steps.encode_userdata.outputs.userdata }}\" }"
 
-    - name: Update ASG to use latest Launch Template version
-      run: |
-        aws autoscaling update-auto-scaling-group \
-          --auto-scaling-group-name $ASG_NAME \
-          --launch-template "LaunchTemplateId=$LAUNCH_TEMPLATE_ID,Version=Latest"
+      - name: Update ASG to use latest Launch Template version
+        run: |
+          aws autoscaling update-auto-scaling-group \
+            --auto-scaling-group-name $ASG_NAME \
+            --launch-template "LaunchTemplateId=$LAUNCH_TEMPLATE_ID,Version=Latest"
 
-    - name: Start Rolling Update
-      run: |
-        aws autoscaling start-instance-refresh \
-          --auto-scaling-group-name $ASG_NAME \
-          --strategy Rolling
+      - name: Start Rolling Update
+        run: |
+          aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name $ASG_NAME \
+            --strategy Rolling
