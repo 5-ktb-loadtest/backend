@@ -82,6 +82,23 @@ const io = socketIO(server, {
   pingInterval: 60000,    // ← 추가: 60초
   pingTimeout: 120000,
 });
+
+// === Redis Adapter 적용 (환경변수 기반) ===
+const { createAdapter } = require('@socket.io/redis-adapter');
+const { Cluster } = require('ioredis');
+
+const clusterNodes = (process.env.REDIS_CLUSTER_NODES || 'localhost:7000')
+  .split(',')
+  .map(addr => {
+    const [host, port] = addr.trim().split(':');
+    return { host, port: Number(port) };
+  });
+
+const cluster = new Cluster(clusterNodes);
+
+io.adapter(createAdapter(cluster, cluster));
+// === 여기까지 추가 ===
+
 require('./sockets/chat')(io);
 
 // Socket.IO 객체 전달
