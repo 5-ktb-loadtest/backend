@@ -244,6 +244,113 @@ class RedisClient {
       }
     }
   }
+
+  async zRevRange(key, start, end) {
+    if (!this.isConnected) await this.connect();
+  
+    if (this.useMock) {
+      // 나중에 필요하면 MockRedisClient에 zRevRange 구현
+      return [];  // or throw new Error('zRevRange not supported in mock');
+    }
+  
+    const result = await this.client.sendCommand(['ZREVRANGE', key, String(start), String(end)]);
+    return result;
+  }
+  
+  async zCard(key) {
+    if (!this.isConnected) await this.connect();
+  
+    if (this.useMock) {
+      // 필요 시 mock 구현
+      return 0;
+    }
+  
+    const result = await this.client.sendCommand(['ZCARD', key]);
+    return Number(result);
+  }
+
+  async hSet(key, data) {
+    if (!this.isConnected) await this.connect();
+  
+    if (this.useMock) {
+      this.client.store.set(key, { value: JSON.stringify(data) });
+      return;
+    }
+  
+    const flat = Object.entries(data).flat(); // ['field1', 'value1', 'field2', 'value2', ...]
+    await this.client.sendCommand(['HSET', key, ...flat]);
+  }  
+
+  async sAdd(key, value) {
+    if (!this.isConnected) await this.connect();
+    const values = Array.isArray(value) ? value : [value];
+    return await this.client.sendCommand(['SADD', key, ...values]);
+  }
+  
+  async sMembers(key) {
+    if (!this.isConnected) await this.connect();
+    return await this.client.sendCommand(['SMEMBERS', key]);
+  }
+  
+  async sIsMember(key, member) {
+    return this.client.sIsMember(key, member);
+  }
+
+  async sRem(key, value) {
+    if (!this.isConnected) await this.connect();
+    const values = Array.isArray(value) ? value : [value];
+    return await this.client.sendCommand(['SREM', key, ...values]);
+  }
+  
+  async zAdd(key, score, member) {
+    if (!this.isConnected) await this.connect();
+    return await this.client.sendCommand(['ZADD', key, score.toString(), member]);
+  }
+  
+  async zRem(key, member) {
+    if (!this.isConnected) await this.connect();
+    return await this.client.sendCommand(['ZREM', key, member]);
+  }
+  async hGetAll(key) {
+    if (!this.isConnected) await this.connect();
+  
+    if (this.useMock) {
+      const item = this.client.store.get(key);
+      if (!item) return {};
+  
+      try {
+        return JSON.parse(item.value);
+      } catch {
+        return item.value;
+      }
+    }
+  
+    const result = await this.client.sendCommand(['HGETALL', key]);
+    const obj = {};
+    for (let i = 0; i < result.length; i += 2) {
+      obj[result[i]] = result[i + 1];
+    }
+    return obj;
+  }
+  async hmGet(key, ...fields) {
+    if (!this.isConnected) await this.connect();
+  
+    if (this.useMock) {
+      const item = this.client.store.get(key);
+      if (!item) return Array(fields.length).fill(null);
+  
+      try {
+        const parsed = JSON.parse(item.value);
+        return fields.map(f => parsed[f] ?? null);
+      } catch {
+        return Array(fields.length).fill(null);
+      }
+    }
+  
+    const result = await this.client.sendCommand(['HMGET', key, ...fields]);
+    return result;
+  }  
+  
 }
 
 const redisClient = new RedisClient();
