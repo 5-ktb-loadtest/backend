@@ -74,7 +74,11 @@ app.get('/health', (req, res) => {
 app.use('/api', routes);
 
 // Socket.IO 설정
-const io = socketIO(server, { cors: corsOptions });
+const io = socketIO(server, {
+  cors: corsOptions,
+  pingInterval: 60000,    // ← 추가: 60초
+  pingTimeout: 120000,
+});
 require('./sockets/chat')(io);
 
 // Socket.IO 객체 전달
