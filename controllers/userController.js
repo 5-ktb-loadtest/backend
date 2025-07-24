@@ -56,7 +56,7 @@ exports.register = async (req, res) => {
     }
 
     // 사용자 중복 확인
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findByEmail({ email });
     if (existingUser) {
       return res.status(409).json({
         success: false,
@@ -65,16 +65,12 @@ exports.register = async (req, res) => {
     }
 
     // 비밀번호 암호화 및 사용자 생성
-    const newUser = new User({ 
+    const newUser = User.create({ 
       name, 
       email, 
       password,
       profileImage: '' // 기본 프로필 이미지 없음
     });
-
-    const salt = await bcrypt.genSalt(10);
-    newUser.password = await bcrypt.hash(password, salt);
-    await newUser.save();
 
     res.status(201).json({
       success: true,
@@ -99,7 +95,7 @@ exports.register = async (req, res) => {
 // 프로필 조회
 exports.getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    const user = await User.findById(req.user.id)
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -145,9 +141,7 @@ exports.updateProfile = async (req, res) => {
         message: '사용자를 찾을 수 없습니다.'
       });
     }
-
-    user.name = name.trim();
-    await user.save();
+    await user.updateProfile({ name: name.trim() });
 
     res.json({
       success: true,
@@ -183,7 +177,7 @@ exports.changePassword = async (req, res) => {
     }
 
     // 2. 사용자 조회
-    const user = await User.findById(req.user.id).select('+password');
+    const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -192,18 +186,7 @@ exports.changePassword = async (req, res) => {
     }
 
     // 3. 현재 비밀번호 확인
-    const isMatch = await user.matchPassword(currentPassword);
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: '현재 비밀번호가 일치하지 않습니다.'
-      });
-    }
-
-    // 4. 새 비밀번호 저장
-    user.password = newPassword;
-    await user.save();
-
+    await user.changePassword(currentPassword, newPassword)
     return res.json({
       success: true,
       message: '비밀번호가 성공적으로 변경되었습니다.'
@@ -274,8 +257,7 @@ exports.uploadProfileImage = async (req, res) => {
 
     // 새 이미지 경로 저장
     const imageUrl = `/uploads/${req.file.filename}`;
-    user.profileImage = imageUrl;
-    await user.save();
+    await user.updateProfile({ profileImage: imageUrl });
 
     res.json({
       success: true,
@@ -320,8 +302,7 @@ exports.deleteProfileImage = async (req, res) => {
         console.error('Profile image delete error:', error);
       }
 
-      user.profileImage = '';
-      await user.save();
+      await user.updateProfile({ profileImage: '' });
     }
 
     res.json({
@@ -349,18 +330,7 @@ exports.deleteAccount = async (req, res) => {
       });
     }
 
-    // 프로필 이미지가 있다면 삭제
-    if (user.profileImage) {
-      const imagePath = path.join(__dirname, '..', user.profileImage);
-      try {
-        await fs.access(imagePath);
-        await fs.unlink(imagePath);
-      } catch (error) {
-        console.error('Profile image delete error:', error);
-      }
-    }
-
-    await user.deleteOne();
+    await user.deleteAccount();
 
     res.json({
       success: true,
