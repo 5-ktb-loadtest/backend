@@ -7,6 +7,9 @@ const crypto = require('crypto');
 function encryptEmail(email) {
   if (!email) return null;
   try {
+    if (!encryptionKey || encryptionKey.length !== 64) {
+      throw new Error('Encryption key must be 64 hex characters (32 bytes)');
+    }
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(encryptionKey, 'hex'), iv);
     let encrypted = cipher.update(email, 'utf8', 'hex');
@@ -14,7 +17,7 @@ function encryptEmail(email) {
     return iv.toString('hex') + ':' + encrypted;
   } catch (error) {
     console.error('Email encryption error:', error);
-    return null;
+    throw error;
   }
 }
 
