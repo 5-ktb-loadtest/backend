@@ -483,34 +483,29 @@ module.exports = function (io) {
               let file;
               // S3 파일 메타데이터 직접 생성/조회
               try {
-                // 기존 파일 레코드가 있는지 확인
-                file = await FileModel.findById(fileData._id);
-
-                if (!file) {
                   // S3 파일 메타데이터 생성
-                  const newFileId = await FileModel.createFile({
-                    _id: fileData._id,
-                    filename: fileData.filename ?? 'unknown',
-                    originalname: fileData.originalname ?? fileData.filename ?? 'unknown',
-                    mimetype: fileData.mimetype ?? 'application/octet-stream',
-                    size: fileData.size ?? 0,
-                    path: fileData.url ?? '',
-                    url: fileData.url ?? '',
-                    destination: 'S3',
-                    user: socket.user.id ?? 'unknown',
-                    isS3File: true,
-                    s3Key: fileData.key ?? fileData.s3Key ?? '',
-                    s3Bucket: fileData.bucket ?? process.env.S3_BUCKET_NAME ?? '',
-                    uploadDate: fileData.uploadedAt ? new Date(fileData.uploadedAt) : new Date()
-                  });
-                  file = await FileModel.findById(newFileId);
+                const newFileId = await FileModel.createFile({
+                  _id: fileData._id,
+                  filename: fileData.filename ?? 'unknown',
+                  originalname: fileData.originalname ?? fileData.filename ?? 'unknown',
+                  mimetype: fileData.mimetype ?? 'application/octet-stream',
+                  size: fileData.size ?? 0,
+                  path: fileData.url ?? '',
+                  url: fileData.url ?? '',
+                  destination: 'S3',
+                  user: socket.user.id ?? 'unknown',
+                  isS3File: true,
+                  s3Key: fileData.key ?? fileData.s3Key ?? '',
+                  s3Bucket: fileData.bucket ?? process.env.S3_BUCKET_NAME ?? '',
+                  uploadDate: fileData.uploadedAt ? new Date(fileData.uploadedAt) : new Date()
+                });
+                file = await FileModel.findById(newFileId);
 
-                  console.log('S3 file metadata saved:', {
-                    fileId: newFileId,
-                    url: file.url,
-                    originalname: file.originalname
-                  });
-                }
+                console.log('S3 file metadata saved:', {
+                  fileId: newFileId,
+                  url: file.url,
+                  originalname: file.originalname
+                });
               } catch (fileError) {
                 console.error('S3 file processing error:', fileError, fileData);
                 // throw new Error('S3 파일 처리 중 오류가 발생했습니다.', fileData);

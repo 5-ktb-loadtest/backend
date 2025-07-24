@@ -288,9 +288,9 @@ async function getReactions(messageId) {
 }
 
 // File 관련
-async function createFile({ filename, originalname, mimetype, size, user, path, 
+async function createFile({ id, filename, originalname, mimetype, size, user, path, 
     uploadDate, destination = '', isS3File = false, s3Key = '', s3Bucket = '', url = ''}) {
-    const fileId = uuidv4();
+    const fileId = id
     const fileData = {
         filename,
         originalname,
