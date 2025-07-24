@@ -46,7 +46,7 @@ sudo mkdir -p /opt/app/backend
 sudo chown -R \$USER:\$USER /opt/app
 cd /opt/app
 
-cat <<EOT > ./backend/.env
+cat <<'EOT' > ./backend/.env
 MONGO_URI=${{ secrets.MONGO_URI }}
 JWT_SECRET=${{ secrets.JWT_SECRET }}
 REDIS_HOST=${{ secrets.REDIS_HOST }}
@@ -56,7 +56,7 @@ ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
 PASSWORD_SALT=${{ secrets.PASSWORD_SALT }}
 EOT
 
-cat <<EOT > docker-compose.yml
+cat <<'EOT' > docker-compose.yml
 version: '3.8'
 services:
   backend1:
