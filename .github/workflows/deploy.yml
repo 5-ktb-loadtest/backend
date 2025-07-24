@@ -130,8 +130,8 @@ EOF
     - name: Encode user-data
       id: encode_userdata
       run: |
-        USERDATA=$(base64 -w0 userdata.sh)
-        echo "userdata=$USERDATA" >> "$GITHUB_OUTPUT"
+        USERDATA=$(base64 -w 0 userdata.sh | tr -d '\n')
+        echo "userdata=$USERDATA" >> $GITHUB_OUTPUT
 
     - name: Create new Launch Template version
       run: |
