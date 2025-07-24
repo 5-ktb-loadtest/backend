@@ -1,3 +1,4 @@
+const FileModel = require('../models/File');
 const redisDataLayer = require('../data/redisDataLayer');
 const jwt = require('jsonwebtoken');
 const { jwtSecret } = require('../config/keys');
