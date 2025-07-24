@@ -21,18 +21,18 @@ class FileModel {
   static async createFile(fileData) {
     // fileData에 위의 모든 필드 포함
     const fileId = await redisDataLayer.createFile({
-      filename: fileData.filename,
-      originalname: fileData.originalname,
-      mimetype: fileData.mimetype,
-      size: fileData.size,
-      user: fileData.user,
-      path: fileData.path,
-      uploadDate: fileData.uploadDate,
-      destination: fileData.destination,
-      isS3File: fileData.isS3File,
-      s3Key: fileData.s3Key,
-      s3Bucket: fileData.s3Bucket,
-      url: fileData.url
+      filename: fileData.filename ?? 'unknown',
+      originalname: fileData.originalname ?? fileData.filename ?? 'unknown',
+      mimetype: fileData.mimetype ?? 'application/octet-stream',
+      size: fileData.size ?? 0,
+      user: fileData.user ?? 'unknown',
+      path: fileData.path ?? fileData.url ?? '',
+      uploadDate: fileData.uploadDate ?? Date.now().toString(),
+      destination: fileData.destination ?? 'S3',
+      isS3File: fileData.isS3File ?? true,
+      s3Key: fileData.s3Key ?? '',
+      s3Bucket: fileData.s3Bucket ?? '',
+      url: fileData.url ?? fileData.path ?? ''
     });
     return FileModel.findById(fileId);
   }
