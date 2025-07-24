@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../../middleware/auth');
-const Room = require('../../models/Room');
+const roomRedis = require('../../services/redis/roomRedis');
 const User = require('../../models/User');
 const { rateLimit } = require('express-rate-limit');
 let io;
@@ -30,13 +30,11 @@ const initializeSocket = (socketIO) => {
 router.get('/health', async (req, res) => {
   try {
     const isMongoConnected = require('mongoose').connection.readyState === 1;
-    const recentRoom = await Room.findOne()
-      .sort({ createdAt: -1 })
-      .select('createdAt')
-      .lean();
+    const recentRoomId = await redis.zrevrange('room:list', 0, 0);
+    const recentRoom = recentRoomId.length > 0 ? await redis.hgetall(`room:${recentRoomId[0]}`) : null;
 
     const start = process.hrtime();
-    await Room.findOne().select('_id').lean();
+    await redis.ping()
     const [seconds, nanoseconds] = process.hrtime(start);
     const latency = Math.round((seconds * 1000) + (nanoseconds / 1000000));
 
@@ -95,48 +93,46 @@ router.get('/', [limiter, auth], async (req, res) => {
       filter.name = { $regex: req.query.search, $options: 'i' };
     }
 
-    // 총 문서 수 조회
-    const totalCount = await Room.countDocuments(filter);
-
     // 채팅방 목록 조회 with 페이지네이션
-    const rooms = await Room.find(filter)
-      .populate('creator', 'name email')
-      .populate('participants', 'name email')
-      .sort({ [sortField]: sortOrder === 'desc' ? -1 : 1 })
-      .skip(skip)
-      .limit(pageSize)
-      .lean();
+    const {
+      rooms,
+      totalCount,
+      totalPages,
+      hasMore
+    } = await roomRedis.getPaginatedRooms({ 
+      page, 
+      pageSize, 
+      sortField, 
+      sortOrder, 
+      search: req.query.search 
+    });
 
     // 안전한 응답 데이터 구성 
     const safeRooms = rooms.map(room => {
-      if (!room) return null;
-
       const creator = room.creator || { _id: 'unknown', name: '알 수 없음', email: '' };
       const participants = Array.isArray(room.participants) ? room.participants : [];
-
+    
       return {
-        _id: room._id?.toString() || 'unknown',
+        _id: room._id || 'unknown',
         name: room.name || '제목 없음',
         hasPassword: !!room.hasPassword,
         creator: {
-          _id: creator._id?.toString() || 'unknown',
+          _id: creator._id || 'unknown',
           name: creator.name || '알 수 없음',
           email: creator.email || ''
         },
-        participants: participants.filter(p => p && p._id).map(p => ({
-          _id: p._id.toString(),
-          name: p.name || '알 수 없음',
-          email: p.email || ''
-        })),
+        participants: participants
+          .filter(p => p && p._id)
+          .map(p => ({
+            _id: p._id,
+            name: p.name || '알 수 없음',
+            email: p.email || ''
+          })),
         participantsCount: participants.length,
         createdAt: room.createdAt || new Date(),
-        isCreator: creator._id?.toString() === req.user.id,
+        isCreator: (creator._id || '') === req.user.id
       };
-    }).filter(room => room !== null);
-
-    // 메타데이터 계산    
-    const totalPages = Math.ceil(totalCount / pageSize);
-    const hasMore = skip + rooms.length < totalCount;
+    }).filter(room => room !== null);    
 
     // 캐시 설정
     res.set({
@@ -193,33 +189,33 @@ router.post('/', auth, async (req, res) => {
       });
     }
 
-    const newRoom = new Room({
-      name: name.trim(),
-      creator: req.user.id,
-      participants: [req.user.id],
-      password: password
-    });
+    // 수정 시작
+    const room = await roomRedis.createRoom({ name: name.trim(), creator: req.user.id, password });
+    const creator = await User.findById(room.creator).select('name email');
 
-    const savedRoom = await newRoom.save();
-    const populatedRoom = await Room.findById(savedRoom._id)
-      .populate('creator', 'name email')
-      .populate('participants', 'name email');
-    
-    // Socket.IO를 통해 새 채팅방 생성 알림
     if (io) {
       io.to('room-list').emit('roomCreated', {
-        ...populatedRoom.toObject(),
-        password: undefined
+        _id: room.roomId,
+        name: room.name,
+        creator,
+        participants: [creator],
+        hasPassword: !!password,
+        createdAt: room.createdAt
       });
     }
     
     res.status(201).json({
       success: true,
       data: {
-        ...populatedRoom.toObject(),
-        password: undefined
+        _id: room.roomId,
+        name: room.name,
+        creator,
+        participants: [creator],
+        hasPassword: !!password,
+        createdAt: room.createdAt
       }
     });
+    // 수정 끝
   } catch (error) {
     console.error('방 생성 에러:', error);
     res.status(500).json({ 
@@ -233,9 +229,7 @@ router.post('/', auth, async (req, res) => {
 // 특정 채팅방 조회
 router.get('/:roomId', auth, async (req, res) => {
   try {
-    const room = await Room.findById(req.params.roomId)
-      .populate('creator', 'name email')
-      .populate('participants', 'name email');
+    const room = await roomRedis.getRoom(req.params.roomId);
 
     if (!room) {
       return res.status(404).json({
@@ -244,11 +238,20 @@ router.get('/:roomId', auth, async (req, res) => {
       });
     }
 
+    const creator = await User.findById(room.creator).select('name email');
+    const participantIds = await roomRedis.getParticipants(req.params.roomId);
+    const participants = await User.find({ _id: { $in: participantIds } }).select('name email');
+
+
     res.json({
       success: true,
       data: {
-        ...room.toObject(),
-        password: undefined
+        _id: req.params.roomId,
+        name: room.name,
+        creator,
+        participants,
+        hasPassword: room.hasPassword === 'true',
+        createdAt: room.createdAt
       }
     });
   } catch (error) {
@@ -264,7 +267,7 @@ router.get('/:roomId', auth, async (req, res) => {
 router.post('/:roomId/join', auth, async (req, res) => {
   try {
     const { password } = req.body;
-    const room = await Room.findById(req.params.roomId).select('+password');
+    const room = await roomRedis.getRoom(req.params.roomId);
     
     if (!room) {
       return res.status(404).json({
@@ -274,37 +277,39 @@ router.post('/:roomId/join', auth, async (req, res) => {
     }
 
     // 비밀번호 확인
-    if (room.hasPassword) {
-      const isPasswordValid = await room.checkPassword(password);
-      if (!isPasswordValid) {
-        return res.status(401).json({
-          success: false,
-          message: '비밀번호가 일치하지 않습니다.'
-        });
-      }
+    const isPasswordValid = await roomRedis.checkPassword(req.params.roomId, password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ success: false, message: '비밀번호가 일치하지 않습니다.' });
     }
 
     // 참여자 목록에 추가
-    if (!room.participants.includes(req.user.id)) {
-      room.participants.push(req.user.id);
-      await room.save();
-    }
-
-    const populatedRoom = await room.populate('participants', 'name email');
+    await roomRedis.addParticipant(req.params.roomId, req.user.id);
+    const creator = room.creator 
+  ? await User.findById(room.creator).select('name email') 
+  : null;
+    const participants = await User.find({ _id: { $in: room.participants } }).select('name email');
 
     // Socket.IO를 통해 참여자 업데이트 알림
     if (io) {
       io.to(req.params.roomId).emit('roomUpdate', {
-        ...populatedRoom.toObject(),
-        password: undefined
+        _id: req.params.roomId,
+        name: room.name,
+        creator,
+        participants,
+        hasPassword: room.hasPassword === 'true',
+        createdAt: room.createdAt
       });
     }
 
     res.json({
       success: true,
       data: {
-        ...populatedRoom.toObject(),
-        password: undefined
+        _id: req.params.roomId,
+        name: room.name,
+        creator,
+        participants,
+        hasPassword: room.hasPassword === 'true',
+        createdAt: room.createdAt
       }
     });
   } catch (error) {
