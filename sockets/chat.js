@@ -466,7 +466,7 @@ module.exports = function(io) {
         const chatRoom = await Room.findOne({
           _id: room,
           participants: socket.user.id
-        });
+        }).lean();
 
         if (!chatRoom) {
           throw new Error('채팅방 접근 권한이 없습니다.');
