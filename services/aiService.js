@@ -54,6 +54,8 @@ class AIService {
         ],
         temperature: 0.7,
         stream: false
+      }, {
+        timeout: 20000
       });
 
       const content = response.data.choices[0].message.content;
