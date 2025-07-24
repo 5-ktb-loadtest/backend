@@ -1,6 +1,6 @@
 const File = require('../models/File');
 const Message = require('../models/Message');
-const Room = require('../models/Room');
+const roomRedis = require('../services/redis/roomRedis');
 const { processFileForRAG } = require('../services/fileService');
 const path = require('path');
 const fs = require('fs');
@@ -63,14 +63,11 @@ const getFileFromRequest = async (req) => {
     }
 
     // 사용자가 해당 채팅방의 참가자인지 확인
-    const room = await Room.findOne({
-      _id: message.room,
-      participants: req.user.id
-    });
-
-    if (!room) {
+    const isParticipant = await roomRedis.isParticipant(message.room.toString(), req.user.id);
+    if (!isParticipant) {
       throw new Error('Unauthorized access');
     }
+
 
     return { file, filePath };
   } catch (error) {
