@@ -546,13 +546,20 @@ module.exports = function(io) {
             throw new Error('지원하지 않는 메시지 타입입니다.');
         }
 
-        await message.save();
-        await message.populate([
+        io.to(room).emit('message', message); // 먼저 브로드캐스트
+
+        // 저장은 비동기로 처리
+        message.save().catch(error => {
+          console.error('Message save error:', error);
+        });
+
+        // populate도 비동기로 처리
+        message.populate([
           { path: 'sender', select: 'name email profileImage' },
           { path: 'file', select: 'filename originalname mimetype size' }
-        ]);
-
-        io.to(room).emit('message', message);
+        ]).catch(error => {
+          console.error('Message populate error:', error);
+        });
 
         // AI 멘션이 있는 경우 AI 응답 생성
         if (aiMentions.length > 0) {
