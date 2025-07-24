@@ -1,4 +1,3 @@
-// models/File.js
 const redisDataLayer = require('../data/redisDataLayer');
 const fs = require('fs').promises;
 
@@ -12,43 +11,58 @@ class FileModel {
     this.user = data.user;
     this.path = data.path;
     this.uploadDate = data.uploadDate;
+    this.destination = data.destination;
+    this.isS3File = data.isS3File;
+    this.s3Key = data.s3Key;
+    this.s3Bucket = data.s3Bucket;
+    this.url = data.url;
   }
 
   static async createFile(fileData) {
-    if (!/^[0-9]+_[a-f0-9]+\.[a-z0-9]+$/.test(fileData.filename)) {
-      throw new Error('올바르지 않은 파일명 형식입니다.');
-    }
-
-    let sanitizedName = fileData.originalname || '';
-    sanitizedName = sanitizedName.replace(/[\/\\]/g, '');
-    sanitizedName = sanitizedName.normalize('NFC');
-
+    // fileData에 위의 모든 필드 포함
     const fileId = await redisDataLayer.createFile({
       filename: fileData.filename,
-      originalname: sanitizedName,
+      originalname: fileData.originalname,
       mimetype: fileData.mimetype,
       size: fileData.size,
-      userId: fileData.user,
-      path: fileData.path
+      user: fileData.user,
+      path: fileData.path,
+      uploadDate: fileData.uploadDate,
+      destination: fileData.destination,
+      isS3File: fileData.isS3File,
+      s3Key: fileData.s3Key,
+      s3Bucket: fileData.s3Bucket,
+      url: fileData.url
     });
-
-    return FileModel.findById(fileId);
+    return File.findById(fileId);
   }
 
   static async findById(fileId) {
     const raw = await redisDataLayer.getFile(fileId);
     if (!raw) return null;
-    return new FileModel(raw);
+    return new File(raw);
+  }
+
+  static async findOne(query) {
+    // 예시: filename으로 찾기
+    if (query.filename) {
+      const file = await redisDataLayer.findFileByFilename(query.filename);
+      if (!file) return null;
+      return new File(file);
+    }
+    // 기타 쿼리도 필요시 구현
+    return null;
   }
 
   async remove() {
-    if (this.path) {
+    if (this.path && this.destination !== 'S3') {
       try {
         await fs.unlink(this.path);
       } catch (error) {
         console.error('File removal error:', error);
       }
     }
+    // S3 파일 삭제는 별도 서비스에서 처리 필요
     await redisDataLayer.deleteFile(this._id);
   }
 
@@ -57,14 +71,13 @@ class FileModel {
   }
 
   getEncodedFilename() {
-    const filename = this.originalname || '';
     try {
+      const filename = this.originalname || '';
       const encodedFilename = encodeURIComponent(filename)
         .replace(/'/g, "%27")
         .replace(/\(/g, "%28")
         .replace(/\)/g, "%29")
         .replace(/\*/g, "%2A");
-
       return {
         legacy: filename.replace(/[^\x20-\x7E]/g, ''),
         encoded: `UTF-8''${encodedFilename}`
@@ -79,7 +92,11 @@ class FileModel {
   }
 
   getFileUrl(type = 'download') {
-    return `/api/files/${type}/${encodeURIComponent(this.filename)}`;
+    if (this.isS3File || this.destination === 'S3') {
+      return this.url || this.path;
+    } else {
+      return `/api/files/${type}/${encodeURIComponent(this.filename)}`;
+    }
   }
 
   getContentDisposition(type = 'attachment') {
@@ -95,6 +112,23 @@ class FileModel {
       'application/pdf'
     ];
     return previewableTypes.includes(this.mimetype);
+  }
+
+  isRemoteFile() {
+    return this.isS3File || this.destination === 'S3';
+  }
+
+  isAccessible() {
+    if (this.isRemoteFile()) {
+      return !!(this.url || this.path);
+    } else {
+      try {
+        const fsSync = require('fs');
+        return fsSync.existsSync(this.path);
+      } catch {
+        return false;
+      }
+    }
   }
 }
 

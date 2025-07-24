@@ -33,7 +33,7 @@ const authController = {
       }
       
       // Check existing user
-      const existingUser = await User.findOne({ email });
+      const existingUser = await User.findByEmail(email);
       if (existingUser) {
         return res.status(409).json({
           success: false,
@@ -42,13 +42,12 @@ const authController = {
       }
       
       // Create user
-      const user = new User({
+      const user = await User.create({
         name,
         email,
         password
       });
 
-      await user.save();
       console.log('User created:', user._id);
 
       // Create session with metadata
@@ -120,7 +119,7 @@ const authController = {
       }
 
       // 사용자 조회
-      const user = await User.findOne({ email }).select('+password');
+      const user = await User.findByEmail(email);
       if (!user) {
         return res.status(401).json({
           success: false,
