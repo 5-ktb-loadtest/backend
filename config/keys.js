@@ -12,7 +12,8 @@ module.exports = {
   redisNodes: [
     { host: process.env.REDIS_MASTER1, port: 7000 },  // master1
     { host: process.env.REDIS_MASTER2, port: 7000 },   // master2
-    { host: process.env.REDIS_MASTER3, port: 7000 }   // master3
+    { host: process.env.REDIS_MASTER3, port: 7000 },
+    { host: process.env.REDIS_MASTER4, port: 7000 }   // master3
   ],
   openaiApiKey: process.env.OPENAI_API_KEY,
   vectorDbEndpoint: process.env.VECTOR_DB_ENDPOINT,
